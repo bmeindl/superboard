@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Get more from Superboard · Superboard</title>
+<style>
+/* Tokens copied 1:1 from superboard/index.html :root — same look as the Welcome alternative. */
+:root{color-scheme:dark;--bg:#08091A;--surface:#1A1B38;--ink:#EAEAF2;--muted:#8F92C4;--line:#4B4F7D;
+--accent:#6FA8FF;--accent-active:#176BFF;--accent-soft:#1C2A4A;--flag:#E4574C;--amber:#F2B23E;--amber-bright:#FFC94D;
+--board:#0F1024;--board-line:#424673;--surface-done:#14152D;--line-done:#34365C;
+--shadow-lift:color-mix(in srgb,var(--accent) 26%,var(--board));--lift-2:4px 4px 0 var(--shadow-lift);
+--mono:ui-monospace,"SF Mono",Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:1180px;margin:auto;padding:36px 28px 60px}
+.mono{font-family:var(--mono)}
+.tag{font:700 10px var(--mono);letter-spacing:2.2px;text-transform:uppercase;color:var(--muted)}
+
+.hero{display:grid;grid-template-columns:auto 1fr;gap:40px;align-items:center;margin:10px 0 40px}
+canvas#bigS{width:132px;height:132px;image-rendering:pixelated;filter:drop-shadow(8px 8px 0 var(--shadow-lift))}
+h1{margin:0 0 6px;font:800 clamp(28px,4.2vw,46px)/1.05 var(--mono);letter-spacing:.5px;text-shadow:3px 3px 0 var(--board-line)}
+h1 em{font-style:normal;color:var(--amber)}
+.lead{color:var(--muted);font-size:17px;max-width:640px;margin:0}
+.lead b{color:var(--ink)}
+
+/* ── The pattern, as one line of board UI ── */
+.pattern{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:14px;align-items:center;margin:0 0 40px}
+.pattern .step{background:var(--surface);border:2px solid var(--line);box-shadow:var(--lift-2);padding:12px 14px}
+.pattern .step .tag{margin-bottom:4px}
+.pattern .arrow{font:800 22px var(--mono);color:var(--amber);text-shadow:2px 2px 0 var(--board-line)}
+
+.cp{display:grid;grid-template-columns:1.1fr 1fr;gap:22px;align-items:stretch;margin:0 0 40px}
+.cp .txt{background:var(--surface);border:2px solid var(--amber);box-shadow:var(--lift-2);padding:18px 20px}
+.cp .txt h2{margin:0 0 8px;font:800 17px var(--mono);letter-spacing:.3px}
+.cp .txt p{margin:0 0 8px;color:var(--muted)}
+.cp .txt b{color:var(--ink)}
+.cp .txt kbd{font:700 11px var(--mono);border:1px solid var(--line);padding:1px 6px;color:var(--ink);background:var(--board)}
+.mock{background:var(--board);border:2px solid var(--board-line);box-shadow:var(--lift-2)}
+.mock header{display:flex;align-items:center;gap:16px;height:40px;padding:0 14px;border-bottom:2px solid var(--board-line);font:700 12px var(--mono);letter-spacing:1px}
+.mock header .nav{display:flex;gap:14px;color:var(--muted)}.mock header .nav .on{color:var(--ink);border:1px solid var(--accent-active);padding:2px 8px}
+.mock .zone{padding:10px 14px 4px;font:700 10px var(--mono);letter-spacing:2.2px;color:var(--muted);text-transform:uppercase}
+.mock .btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px 14px 12px}
+.mock .b{background:var(--surface);border:2px solid var(--line);box-shadow:3px 3px 0 var(--shadow-lift);padding:8px 10px;font-size:12.5px}
+.mock .b small{display:block;font:10px var(--mono);color:var(--muted);margin-top:2px}
+.mock .b.sched{border-color:var(--amber)}
+.lbl{position:relative}.lbl::after{content:attr(data-l);position:absolute;right:-6px;top:-11px;background:var(--amber);color:#08091A;font:800 9px var(--mono);padding:1px 5px;letter-spacing:.5px}
+@media(max-width:900px){.cp{grid-template-columns:1fr}}
+/* ── Examples: "you type" → "you get" ── */
+.ex{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:40px}
+.card{background:var(--surface);border:2px solid var(--line);box-shadow:var(--lift-2);padding:16px 16px 14px;display:flex;flex-direction:column;gap:10px}
+.card .n{font:800 20px var(--mono);color:var(--amber);text-shadow:2px 2px 0 var(--board-line)}
+.card h3{margin:0;font-size:15px;line-height:1.25}
+.ask{background:var(--board);border:1px solid var(--line);padding:9px 11px;font:13px/1.45 var(--mono);color:var(--ink);position:relative}
+.ask::before{content:"YOU TYPE INTO A CARD'S THREAD";position:absolute;top:-8px;left:8px;background:var(--surface);padding:0 5px;font:700 9px var(--mono);letter-spacing:1.8px;color:var(--muted)}
+.ask kbd{font:700 11px var(--mono);background:var(--accent-active);color:#fff;padding:1px 6px;border:1px solid var(--accent-active);margin-left:4px}
+.got{display:flex;gap:10px;align-items:flex-start;color:var(--muted);font-size:13px}
+.got .chip{flex:none;display:inline-flex;gap:6px;align-items:center;font:700 11px var(--mono);border:2px solid var(--amber);color:var(--amber);padding:4px 8px;background:var(--board);white-space:nowrap}
+.got .chip.blue{border-color:var(--accent);color:var(--accent)}
+.got .chip.red{border-color:var(--flag);color:var(--flag)}
+.got b{color:var(--ink)}
+/* mini cockpit tile */
+.tile{border:2px solid var(--line);background:var(--board);padding:8px 10px;font:12px var(--mono);display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.tile .v{font:800 18px var(--mono);color:var(--amber-bright)}
+.tile .l{font:9px var(--mono);letter-spacing:1.5px;color:var(--muted);text-transform:uppercase}
+.tile .up{color:#7BD88F}
+
+
+.cta{display:flex;align-items:center;gap:18px;background:var(--surface);border:2px solid var(--amber);box-shadow:var(--lift-2);padding:18px 20px}
+.cta .btn{font:700 12px var(--mono);border:2px solid var(--line);padding:8px 14px;background:var(--board);white-space:nowrap}
+.cta .btn.done{border-color:var(--amber);color:var(--amber)}
+.cta p{margin:0;color:var(--muted)}
+.cta p b{color:var(--ink)}
+footer{margin-top:28px;font:11px var(--mono);color:var(--muted);letter-spacing:.3px}
+@media(max-width:900px){.hero{grid-template-columns:1fr;gap:20px}canvas#bigS{width:84px;height:84px}.ex{grid-template-columns:1fr}.pattern{grid-template-columns:1fr}.pattern .arrow{text-align:center}}
+</style>
+<main>
+
+<section class="hero">
+  <canvas id="bigS" width="16" height="16" aria-label="Superboard mark"></canvas>
+  <div>
+    <div class="tag">Get more from Superboard · optional · read in two minutes</div>
+    <h1>Get more from <em>SUPER</em>BOARD.<br>You don't configure it — you ask.</h1>
+    <p class="lead">Everything the crew can do for you starts as a sentence in a card's thread. <b>The agent proposes, you approve, it lands on the board</b> — as a card, a Cockpit action, or a routine. First, one thing to know about the Cockpit. Then four things people rarely think to ask for.</p>
+  </div>
+</section>
+
+<section class="pattern" aria-label="The pattern">
+  <div class="step"><div class="tag">1 · You write</div>a plain sentence into any card — no config file, no syntax</div>
+  <div class="arrow">→</div>
+  <div class="step"><div class="tag">2 · The agent proposes</div>a plan, a decision sheet, or a first version — nothing external without asking</div>
+  <div class="arrow">→</div>
+  <div class="step"><div class="tag">3 · It lives on the board</div>a new card, a Cockpit button, or a card that appears on schedule</div>
+</section>
+
+<section class="cp" aria-label="What the Cockpit is">
+  <div class="txt">
+    <h2>00 · FIRST: WHAT THE COCKPIT IS</h2>
+    <p>Next to <kbd>TO-DOS</kbd> there is a second tab, <kbd>COCKPIT</kbd>. It holds <b>buttons</b>, and a button is nothing mysterious: a saved sentence to the agent with a name on it.</p>
+    <p><b>Shortcuts</b> — things you'd otherwise type again and again: "clean up the board", "digest my inbox". Press, the run starts, the result lands as a card.</p>
+    <p><b>Routines</b> — the same buttons on a schedule: every morning, every Friday, when you open the tab. Off Duty and night rest pause them.</p>
+    <p>It starts with a single shipped button — <b>⬆ Check for updates</b> — and fills up because <b>you ask for more buttons</b>, which is what every example below does.</p>
+  </div>
+  <div class="mock" aria-hidden="true">
+    <header><span>SUPERBOARD</span><span class="nav"><span>TO-DOS</span><span class="on">COCKPIT</span></span></header>
+    <div class="zone">Shortcuts · press when you need them</div>
+    <div class="btns"><div class="b lbl" data-l="SHIPPED">⬆ Check for updates<small>the one button that is there from day one</small></div><div class="b">🧹 Board cleanup<small>archive done cards, tidy topics</small></div></div>
+    <div class="zone">Routines · run on a schedule</div>
+    <div class="btns"><div class="b sched lbl" data-l="07:00 DAILY">☀ Morning card<small>what changed overnight</small></div><div class="b sched">🩺 Health check<small>Fridays · last 10 runs</small></div></div>
+  </div>
+</section>
+
+<div class="tag" style="margin-bottom:12px">Four things you can simply ask for</div>
+<section class="ex">
+  <article class="card">
+    <div class="n">01</div>
+    <h3>Put your dashboard in the Cockpit.</h3>
+    <div class="ask">Add a tile to the Cockpit with this week's numbers from my analytics tool — opens, sign-ups, churn. Refresh when I open the tab. <kbd>▶ Agent</kbd></div>
+    <div class="tile"><div><div class="v">4.2k</div><div class="l">opens</div></div><div><div class="v">61 <span class="up">▲</span></div><div class="l">sign-ups</div></div><div><div class="v">1.9%</div><div class="l">churn</div></div></div>
+    <div class="got"><span class="chip blue">◫ Cockpit tile</span><span>Works with whatever your agent can reach — a BI export, a spreadsheet, an API. It will first ask <b>where the numbers live</b> and whether it may read them.</span></div>
+  </article>
+
+  <article class="card">
+    <div class="n">02</div>
+    <h3>A briefing that's waiting for you.</h3>
+    <div class="ask">Every weekday at 07:00, drop a card in Home with what's new since yesterday: calendar, mail subjects, and any card that changed overnight. <kbd>▶ Agent</kbd></div>
+    <div class="got"><span class="chip">⏰ Routine</span><span>The agent sets up the schedule and shows you the first briefing before it runs unattended. <b>Off Duty</b> pauses it; night rest keeps it quiet.</span></div>
+  </article>
+
+  <article class="card">
+    <div class="n">03</div>
+    <h3>Let the crew sign in as you — safely.</h3>
+    <div class="ask">Let ▶ Agent use my GitHub account so it can open pull requests from a card. <kbd>▶ Agent</kbd></div>
+    <div class="got"><span class="chip red">🔑 Handoff</span><span>Logins are yours. The agent prepares everything, then hands you a <b>copy-paste command</b> for the one step it must not do itself. After that, "open a PR for this" is a sentence.</span></div>
+  </article>
+
+  <article class="card">
+    <div class="n">04</div>
+    <h3>Turn an annoyance into a button.</h3>
+    <div class="ask">Runs felt slow yesterday. Build me a latency check I can press — how long did the last ten runs take, and which step ate the time? <kbd>▶ Agent</kbd></div>
+    <div class="got"><span class="chip blue">▶ Cockpit action</span><span>Small tools you'd never schedule a project for. The agent writes it, runs it once in front of you, and adds the button. <b>Sports desk, email digest, transcript intake</b> — same move.</span></div>
+  </article>
+</section>
+
+<section class="cta">
+  <span class="btn done">✓ Done</span>
+  <p><b>Pick one and type it.</b> Change the details to your own tools and names — the agent asks before it touches anything, and you can always <span class="mono">✂ New thread</span> if it heads the wrong way.</p>
+</section>
+
+<footer>Fictional workspace · examples and numbers are invented · no personal data · rendered locally by Superboard</footer>
+</main>
+<script>
+const S=["................","................","................","....########....","..############..","..###......###..","..###...........","..###########...","...###########..","...........###..","...........###..","..###......###..","..############..","....########....","................","................"];
+function draw(cv,ink){const c=cv.getContext("2d");c.clearRect(0,0,16,16);c.fillStyle=ink;S.forEach((r,y)=>[...r].forEach((p,x)=>{if(p==="#")c.fillRect(x,y,1,1)}))}
+const big=document.getElementById("bigS");draw(big,"#F2B23E");
+if(!matchMedia("(prefers-reduced-motion: reduce)").matches){
+  const lit=[];S.forEach((r,y)=>[...r].forEach((p,x)=>{if(p==="#")lit.push([x,y])}));
+  setInterval(()=>{draw(big,"#F2B23E");const c=big.getContext("2d");const [x,y]=lit[Math.random()*lit.length|0];c.fillStyle="#FFC94D";c.fillRect(x,y,1,1);},1800);
+}
+</script>
+</html>
