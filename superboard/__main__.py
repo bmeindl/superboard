@@ -27,6 +27,10 @@ WORKSPACE_STARTER_FILES = {
     "rituals.json": PKG / "rituals.json",
     "board.config.json": PKG / "board.config.example.json",
     ".claude/skills/superboard/SKILL.md": PKG / "superboard-skill.md",
+    # Shipped alongside the one bundled cockpit action: the "Check for updates" card
+    # is only a prompt, so the skill it names has to exist in a stranger's workspace
+    # on day one. Same create-only rule as every other starter file.
+    ".claude/skills/superboard-update/SKILL.md": PKG / "superboard-update-skill.md",
 }
 
 STARTER_HEADER = """# Board

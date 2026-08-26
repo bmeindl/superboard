@@ -1,4 +1,14 @@
 {
-  "_comment": "Cockpit action cards. A fresh board starts empty because useful repeatable jobs are personal. The Set up my board thread proposes 4–6 actions from the user's real work; each accepted card becomes a one-click agent mission here.",
-  "actions": []
+  "_comment": "Cockpit action cards. Superboard ships exactly one: keeping itself current is a job every workspace has, so the Cockpit is never an empty shell. Everything else is personal — the Set up your Cockpit card proposes 2–4 actions from the user's real work, and each accepted card becomes a one-click agent mission here.",
+  "actions": [
+    {
+      "key": "superboard-update",
+      "label": "Check for updates",
+      "icon": "⬆️",
+      "auth": false,
+      "group": "maintenance",
+      "rhythm": "weekly or on demand",
+      "prompt": "Check for updates: load the skill in `.claude/skills/superboard-update/SKILL.md` and follow it. Compare the installed Superboard package with the latest release on PyPI, and any installed catalogue skills with their catalogue. Clicking this card is my order to install: first make sure this workspace is a git repository and commit the current state (initialise it if needed, no need to ask), then update and verify that the board still starts and loads. If I changed files locally, merge the update with my changes yourself; ask me only if a conflict is genuinely unresolvable. Never write to actions.json, rituals.json, board.config.json, inbox/board.md or the thread files. If everything is current, say so in one line and stop. Otherwise end with a short, friendly note on what is new for me."
+    }
+  ]
 }

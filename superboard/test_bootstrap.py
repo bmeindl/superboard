@@ -33,13 +33,17 @@ def test_bootstrap_creates_workspace_owned_instance_files(
     assert board.is_file()
     assert (tmp_path / "inbox" / "gc-threads").is_dir()
     assert (tmp_path / ".superboard" / "journal").is_dir()
-    assert json.loads((tmp_path / "actions.json").read_text())["actions"] == []
+    seeded_actions = json.loads((tmp_path / "actions.json").read_text())["actions"]
+    assert [a["key"] for a in seeded_actions] == ["superboard-update"]
     assert json.loads((tmp_path / "rituals.json").read_text())["rituals"] == {}
     config = json.loads((tmp_path / "board.config.json").read_text())
     assert config["owner"]["name"] == "You"
     assert config["night_pause"]["enabled"] is False
     skill = tmp_path / ".claude" / "skills" / "superboard" / "SKILL.md"
     assert skill.read_text(encoding="utf-8").startswith("---\nname: superboard\n")
+    # The shipped cockpit card names this skill by path, so it must exist on day one.
+    update_skill = tmp_path / ".claude" / "skills" / "superboard-update" / "SKILL.md"
+    assert update_skill.read_text(encoding="utf-8").startswith("---\nname: superboard-update\n")
 
 
 def test_starter_is_a_pending_setup_checklist() -> None:
@@ -66,14 +70,15 @@ def test_starter_is_a_pending_setup_checklist() -> None:
         "10 · Set up an off-duty view",
         "11 · Turn on night rest",
         "12 · Let Superboard learn from your threads",
-        "13 · Finish Getting started",
+        "13 · Get more from Superboard",
+        "14 · Finish Getting started",
     ]
     # Core orientation and Cockpit payoff stay in Now; optional setup waits in Next.
     onboarding = text.split("## My to-dos", 1)[0]
     now = onboarding.split("### Next", 1)[0]
     next_ = onboarding.split("### Next", 1)[1].split("### Backlog", 1)[0]
     backlog = onboarding.split("### Backlog", 1)[1]
-    assert now.count("\n- [ ] ") == 7 and next_.count("\n- [ ] ") == 5
+    assert now.count("\n- [ ] ") == 7 and next_.count("\n- [ ] ") == 6
     assert backlog.count("\n- [ ] ") == 1
     normal = text.split("## My to-dos", 1)[1].split("# To discuss", 1)[0]
     assert normal.count("\n- [ ] ") == 0
