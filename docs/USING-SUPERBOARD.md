@@ -20,6 +20,12 @@ board from inside their directory with plain `superboard`.
 The server listens on `http://localhost:47822`. Superboard reports the workspace
 path, Git placement, and Claude Code readiness before creating anything.
 
+If Claude Code is already installed and signed in, the user can instead give it
+the public repository URL and ask it to inspect the README, explain the commands,
+set up `~/Superboard`, start the process, and open the local URL. That is an agent
+using its existing machine permissions—not a silent installer built into
+Superboard. It may still ask before installing `uv` or opening an application.
+
 `uvx` resolves the requested package in a disposable environment. To pick up the
 latest published release explicitly, run `uvx --refresh superboard ~/Superboard`.
 There is no persistent app install to remove: stop the process and optionally run
@@ -49,22 +55,25 @@ a file the user already owns.
 
 ## First-run journey
 
-A fresh browser opens the normal To-dos view with one Getting started category
-and twelve numbered cards. Each title names the outcome; there is no generic
+A fresh browser opens the normal To-dos view with separate Getting started and
+My to-dos categories. Getting started has thirteen numbered cards; My to-dos is
+empty and ready for ordinary work. Each onboarding title names the outcome; there is no generic
 "optional setup" gate hiding several unrelated jobs:
 
 | Now | Next | Backlog |
 | --- | --- | --- |
-| 1 · Start here · Tour Superboard | 7 · Set up an email digest | 12 · Finish Getting started |
-| 2 · Set up this workspace | 8 · Set up one routine | |
-| 3 · Add your first real to-dos | 9 · Set up an off-duty view | |
-| 4 · Understand agent runs and threads | 10 · Turn on night rest | |
-| 5 · Check your agent and model setup | 11 · Let Superboard learn from your threads | |
-| 6 · Set up your Cockpit | | |
+| 1 · Start here · Meet Superboard | 8 · Set up an email digest | 13 · Finish Getting started |
+| 2 · Set up this workspace | 9 · Set up one routine | |
+| 3 · Add your first real to-do | 10 · Set up an off-duty view | |
+| 4 · Understand runs, threads and cache | 11 · Turn on night rest | |
+| 5 · Find settings and get help | 12 · Let Superboard learn from your threads | |
+| 6 · Check your agent and model setup | | |
+| 7 · Set up your Cockpit | | |
 
-Opening a card spends no model tokens. Cards 1 and 4 link directly to static
-desktop documentation; their prepared thread exists only for questions. Pressing
-`▶ Agent` on any card starts its prepared turn. `✓ Done` completes it; the checkbox remains available for immediate undo
+Opening a card spends no model tokens. Card 1 asks the user to press `▶ Agent` once;
+that round opens the same-origin introduction and keeps follow-up questions in the
+card. Card 4 explains runs, threads, new sessions and cache using its own task as the
+example. `✓ Done` completes a card; the checkbox remains available for immediate undo
 until reload. Setup cards are guidance, not gates, except that the final cleanup
 card requires the other cards to be completed or consciously skipped. It then
 archives their cards and threads before removing the topic.
@@ -82,7 +91,7 @@ The optional Off Duty setup stores exact hidden and visible topic names in
 `board.config.json` only after approval. The toggle changes the local projection,
 not the board; unclassified and newly created topics remain visible.
 
-A fresh workspace has no Cockpit tab or empty zone shell. Card 6 sits in Now after
+A fresh workspace has no Cockpit tab or empty zone shell. Card 7 sits in Now after
 the workspace has context. The tab appears after
 at least one valid action exists, with only populated action zones. The base-setup
 round first creates one idempotent extension card, then proposes 2–4 actions whose

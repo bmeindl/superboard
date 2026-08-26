@@ -1,30 +1,42 @@
 # Superboard
 
-**A local board for work you delegate to coding agents.** Drop in rough work;
-the agent researches, builds, or returns the decision only you can make. Every
-card keeps its own persistent thread, and the underlying state stays in plain
-files you own.
+**A local to-do board where every card can stay manual or become a standing
+conversation with a coding agent.** Add ordinary work first; delegate research,
+writing or changes when that helps. The underlying state stays in plain files
+you own.
 
 [![leak scan](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml/badge.svg?branch=main)](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml)
 
-![A fresh Superboard workspace with twelve concrete onboarding cards](https://raw.githubusercontent.com/bmeindl/superboard/v0.1.0/docs/assets/superboard-hero.png)
+![A fresh Superboard workspace with onboarding separate from ordinary to-dos](https://raw.githubusercontent.com/bmeindl/superboard/v0.1.0/docs/assets/superboard-hero.png)
 
 ```sh
 uvx superboard ~/Superboard
 # then open http://localhost:47822
 ```
 
+Already use Claude Code? Give it the whole setup job:
+
+> Use <https://github.com/bmeindl/superboard> as the Superboard package I want.
+> Read its README, explain what you will run, set it up in `~/Superboard`, start
+> it, and open the local board for me. Do not clone the source into my workspace.
+
+Claude Code still uses its existing host permissions and may ask before installing
+`uv` or opening an application. The explicit terminal command above remains the
+portable fallback.
+
 ## The one-minute version
 
-1. Open the board. A fresh workspace shows one **Getting started** category.
-2. Open **1 · Start here · Tour Superboard**. Its desktop walkthrough is static:
-   no agent run, login, or model tokens.
-3. Use **2 · Set up this workspace**, then **3 · Add your first real to-dos**.
-   The agent adapts the foundation to a blank home or an existing repository.
+1. Open the board. A fresh workspace separates **Getting started** from the empty
+   **My to-dos** area where normal work belongs.
+2. Open **1 · Start here · Meet Superboard** and press **▶ Agent**. It opens the
+   local introduction when the runner can access your desktop; otherwise it returns
+   the local link. It answers questions in that card and tells you when to mark it done.
+3. Use **2 · Set up this workspace**, then **3 · Add your first real to-do**.
+   The agent adapts the foundation and puts one genuine card under My to-dos.
 4. The remaining cards each name one outcome—agent/model setup, Cockpit, email
    digest, one routine, Off Duty, night rest or later thread learning—so you can
    complete or skip them independently.
-5. Add more work whenever. `Enter` creates a card; `Cmd/Ctrl+Enter` creates it and
+5. Add more work whenever. `Enter` creates a manual card; `Cmd/Ctrl+Enter` creates it and
    starts the agent.
 6. Finish onboarding. The final card archives the setup threads and removes the
    Getting started category.

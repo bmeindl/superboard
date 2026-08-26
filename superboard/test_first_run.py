@@ -62,20 +62,21 @@ def test_starter_missions_never_point_at_unseeded_workspace_docs() -> None:
             )
 
 
-def test_first_card_is_a_static_tour_not_a_paid_readme_round() -> None:
+def test_first_card_is_an_agent_led_introduction_not_a_readme_round() -> None:
     cli = _cli_module()
     _col, title, short, mission, _ask = cli.STARTER_ITEMS[0]
-    assert "Start here" in title and "Tour Superboard" in title
-    assert "No agent run or model tokens" in short
-    assert "static product tour" in mission
+    assert "Start here" in title and "Meet Superboard" in title
+    assert "Press ▶ Agent once" in short
+    assert "GC_BOARD_URL" in mission and "/onboarding-showcase" in mission
+    assert "open` on macOS" in mission and "xdg-open" in mission
     assert "--docs readme" not in mission
 
 
-def test_both_static_orientation_cards_keep_their_direct_tour_cta() -> None:
+def test_orientation_has_no_hard_coded_card_specific_cta() -> None:
     source = (HERE / "index.html").read_text(encoding="utf-8")
-    assert "1 · Start here|4 · Understand agent runs" in source
-    assert "Open desktop tour ↗" in source
-    assert "Open thread & cache guide ↗" in source
+    assert "onboarding-tour" not in source
+    assert "Open desktop tour ↗" not in source
+    assert "Open thread & cache guide ↗" not in source
 
 
 def test_product_docs_are_served_rather_than_copied() -> None:
@@ -160,8 +161,9 @@ def test_the_run_contract_names_the_workspace_client_not_a_module() -> None:
 def test_cards_that_create_things_name_the_client() -> None:
     cli = _cli_module()
     missions = {title: mission for _c, title, _s, mission, _a in cli.STARTER_ITEMS}
-    real_work = next(m for t, m in missions.items() if "Add your first real to-dos" in t)
-    assert "--new-topic" in real_work and "--new-card" in real_work
+    real_work = next(m for t, m in missions.items() if "Add your first real to-do" in t)
+    assert "--new-card" in real_work and "--topic 'My to-dos'" in real_work
+    assert "--new-topic" not in real_work
     assert "never edit inbox/board.md" in real_work.lower()
 
 
@@ -189,24 +191,24 @@ def test_runner_status_is_exposed_and_rendered() -> None:
 
 # ── Checklist shape: finite, and the payoff arrives early ────────────────────
 
-def test_the_first_real_hand_off_follows_the_visual_tour() -> None:
+def test_the_first_real_hand_off_follows_the_introduction() -> None:
     cli = _cli_module()
     titles = [title for _c, title, _s, _m, _a in cli.STARTER_ITEMS]
-    assert 8 <= len(titles) <= 12, "the checklist stays finite without bundling setup"
+    assert 8 <= len(titles) <= 13, "the checklist stays finite without bundling setup"
     assert "Start here" in titles[0]
     assert "Set up this workspace" in titles[1]
-    assert "Add your first real to-dos" in titles[2]
+    assert "Add your first real to-do" in titles[2]
     assert not any("Find your way around" in title for title in titles)
 
 
 def test_setup_concerns_are_concrete_and_cockpit_is_in_now() -> None:
     titles = [title.strip("*") for _c, title, _s, _m, _a in _cli_module().STARTER_ITEMS]
-    assert "10 · Turn on night rest" in titles
-    assert "9 · Set up an off-duty view" in titles
-    assert "6 · Set up your Cockpit" in titles
-    assert "7 · Set up an email digest" in titles
-    assert "8 · Set up one routine" in titles
-    assert "11 · Let Superboard learn from your threads" in titles
+    assert "11 · Turn on night rest" in titles
+    assert "10 · Set up an off-duty view" in titles
+    assert "7 · Set up your Cockpit" in titles
+    assert "8 · Set up an email digest" in titles
+    assert "9 · Set up one routine" in titles
+    assert "12 · Let Superboard learn from your threads" in titles
     assert not any("optional setup" in title.lower() for title in titles)
     cockpit = next(item for item in _cli_module().STARTER_ITEMS if "Cockpit" in item[1])
     assert cockpit[0] == "Jetzt"
@@ -218,7 +220,7 @@ def test_workspace_and_agent_setup_are_separate_concrete_outcomes() -> None:
     setup = missions["2 · Set up this workspace"]
     assert "context/README.md" in setup and "2–5 board topics" in setup
     assert "does not move its cards, threads or spend history" in setup
-    agent = missions["5 · Check your agent and model setup"]
+    agent = missions["6 · Check your agent and model setup"]
     assert "platform and run profile" in agent
     assert "Claude Code or the experimental macOS Codex runner" in agent
     assert "OpenCode is not a supported runner" in agent
@@ -227,7 +229,7 @@ def test_workspace_and_agent_setup_are_separate_concrete_outcomes() -> None:
 
 def test_cockpit_setup_creates_extension_before_any_write() -> None:
     missions = {title.strip("*"): mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
-    cockpit = missions["6 · Set up your Cockpit"]
+    cockpit = missions["7 · Set up your Cockpit"]
     assert "FIRST ensure exactly one" in cockpit
     assert "Cockpit extension · Add a useful recurring action" in cockpit
     assert cockpit.index("FIRST") < cockpit.index("Inventory")
@@ -249,15 +251,43 @@ def test_showcase_is_same_origin_and_fictional() -> None:
     showcase = (HERE / "onboarding-showcase.html").read_text(encoding="utf-8")
     assert '"/onboarding-showcase"' in server_source
     assert "Fictional workspace" in showcase and "no personal data" in showcase
-    assert "desktop layout" in showcase and "Now / Next / Backlog" in showcase
+    assert "desktop layout" in showcase
+    assert all(f'<div class="head">{column}</div>' in showcase for column in ("NOW", "NEXT", "BACKLOG"))
     assert 'id="threads"' in showcase
     assert "Sync activity tracker" in showcase
     assert 'id="off-duty"' in showcase
+    assert "A card is a to-do first" in showcase
+    assert "Keep one thread for one outcome" in showcase
+    assert "cut the session when the outcome changes" not in showcase
+
+
+def test_help_and_thread_lessons_are_task_shaped_and_agent_led() -> None:
+    missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
+    thread_lesson = missions["4 · Understand runs, threads and cache"]
+    assert "current card as the example" in thread_lesson
+    assert "prompt cache is only an efficiency" in thread_lesson
+    assert "different outcome" in thread_lesson
+    help_lesson = missions["5 · Find settings and get help"]
+    assert "Superboard Agent entry" in help_lesson
+    assert "plain workspace files" in help_lesson
+    assert "not a complete settings screen" in help_lesson
+
+
+def test_manual_cards_are_the_baseline_and_overlapping_saves_are_serialized() -> None:
+    source = (HERE / "index.html").read_text(encoding="utf-8")
+    assert "Enter adds a normal to-do" in source
+    assert "manual is fine; the agent is optional" in source
+    assert "every card here is a standing thread" not in source
+    assert "if (saving && !retried)" in source
+    assert "saveAgain = true" in source
+    assert "if (saveAgain)" in source
+    assert "const newItemId" in source
+    assert "id: newItemId()" in source
 
 
 def test_off_duty_uses_explicit_topics_and_keeps_unknown_topics_visible() -> None:
     missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
-    mission = missions["9 · Set up an off-duty view"]
+    mission = missions["10 · Set up an off-duty view"]
     assert "off_duty.hidden_topics" in mission and "off_duty.visible_topics" in mission
     assert "unknown or future topics remain visible" in mission
     source = (HERE / "index.html").read_text(encoding="utf-8")

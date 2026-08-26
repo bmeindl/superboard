@@ -754,12 +754,6 @@
   }
   .gc-actions .complete-btn:disabled { opacity: .55; cursor: default; }
   .gc-actions .hint { font-family: var(--mono); font-size: var(--fs-badge); color: var(--muted); }
-  .onboarding-tour { margin: 0 18px 14px; padding: 14px 16px; border: 1px solid var(--accent);
-    background: var(--panel); display: flex; align-items: center; justify-content: space-between;
-    gap: 14px; }
-  .onboarding-tour span { color: var(--muted); font-size: var(--fs-small); }
-  .onboarding-tour a { color: var(--board); background: var(--accent-active); border: 1px solid var(--accent-active);
-    padding: 8px 12px; font-family: var(--mono); font-weight: 700; text-decoration: none; white-space: nowrap; }
   /* ⋯-Menü (2026-07-16, Q1=A): Sekundär-Aktionen raus aus der Zeile — 8 Controls waren
      zu viele, und „Schließen" neben „Faden schließen" war ein Verwechsler (Esc/Backdrop bleiben). */
   .gc-more-wrap { position: relative; margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -1718,7 +1712,8 @@ const WAIT_DECAY_DAYS = 7;
 // bestehende @on-Verhalten (Matrix-Hiding bis Stichtag + Heute-Pill) bleibt für Items, die
 // NICHT hier liegen, unverändert — diese Spalte ist additiv, kein Ersatz.
 const TERMIN_COL = "Termine";
-let board = null, etag = null, saveTimer = null, editing = false, locked = false, pendingFocus = null, overlayOpen = false;
+let board = null, etag = null, saveTimer = null, saving = false, saveAgain = false,
+    editing = false, locked = false, pendingFocus = null, overlayOpen = false;
 // Shared DOM helper must exist before ANY clock callback. This used to be a `const`
 // near the end of the script; a synchronous 23:00 pause render hit its TDZ and aborted
 // evaluation of every declaration below it, leaving the whole navigation half-wired.
@@ -3565,13 +3560,9 @@ function swimDrop(e, themeIdxs, col, cell) {
   dropItem(e, { kind: "t", ti, col }, null);
 }
 
-// --- Adder: eine Karte anlegen ODER sie direkt dem Agenten geben -----------------------
-// Der Spalten-Adder legte bisher IMMER eine threadlose Karte an — auf einer frischen
-// Installation lehrte er damit genau das Gegenteil von dem, was dieses Board ausmacht:
-// alles laeuft ueber einen Agenten-Faden, nichts entsteht einfach so.
-// Enter bleibt unveraendert (Rapid Entry: eine Liste am Stueck tippen, Fokus bleibt im
-// Feld), Cmd/Strg+Enter uebergibt an den Agenten — dieselbe Taste wie in der
-// Schnellerfassung und bewusst NICHT Shift+Enter, das in Chat-UIs "neue Zeile" heisst.
+// --- Adder: a normal to-do first, an agent hand-off only when useful -------------------
+// Enter is the baseline (rapid entry, focus stays in the field). Cmd/Ctrl+Enter hands
+// the card to the agent. A fresh board must not imply that every reminder needs a run.
 const CMD_ENTER = (navigator.platform || "").toLowerCase().includes("mac") ? "\u2318\u23ce" : "Ctrl+\u23ce";
 // Rotierende Tipps im Platzhalter LEERER Spalten — kein zusaetzliches DOM-Element, das auf
 // einem vollen Board stoeren wuerde, und man liest auch nach Wochen noch etwas Neues.
@@ -3579,13 +3570,15 @@ const CMD_ENTER = (navigator.platform || "").toLowerCase().includes("mac") ? "\u
 // placeholder/title/aria-label).
 const ADDER_TIPS = [
   `${CMD_ENTER} hands it to your agent`,
-  "every card here is a standing thread",
+  "Enter adds a normal to-do",
   `${CMD_ENTER} makes it a task the agent works on`,
   "ask your agent to rename or add topics",
-  "rituals and cockpit cards: just ask your agent",
+  "manual is fine; the agent is optional",
 ];
 // Zeitscheibe statt Timer: derselbe Tipp fuer 45s, wechselt beim naechsten Rebuild von selbst.
 const adderTip = () => ADDER_TIPS[Math.floor(Date.now() / 45000) % ADDER_TIPS.length];
+const newItemId = () => [...crypto.getRandomValues(new Uint8Array(6))]
+  .map(byte => byte.toString(16).padStart(2, "0")).join("");
 // GENAU EINER pro Rebuild, und nur in der breitesten Spalte ("Jetzt"): auf einem leeren Board
 // stuenden sonst sechs identische Tipps nebeneinander, und in den schmalen Spalten schneidet
 // der Platzhalter mitten im Wort ab (im frischen Testrig gesehen). render() setzt die Sperre zurueck.
@@ -3621,7 +3614,11 @@ function makeAdder(loc, empty) {
     if (e.key !== "Enter" || !raw) return;
     if (e.metaKey || e.ctrlKey) { e.preventDefault(); handToAgent(loc, raw, add); return; }
     const { title, due } = extractDue(raw);
-    listAt(loc).push({ done: false, title, date: today(), due, mark: false, body: [], thread: [], subs: [] });
+    // Give the card its stable identity before the first save. If the server has to
+    // assign it, this tab still holds an ID-less copy and the next conflict recovery
+    // can mistake the saved card for a separate server-only item.
+    listAt(loc).push({ done: false, title, date: today(), due, mark: false, id: newItemId(),
+                       body: [], thread: [], subs: [] });
     touched(); render();
     // Rapid Entry: Fokus zurueck in denselben Adder
     const again = [...document.querySelectorAll(".adder")].find(a => a.dataset.loc === add.dataset.loc);
@@ -4882,7 +4879,7 @@ function closeGcOverlay({ restoreFocus = true } = {}) {
 // Frontend-Version: load() holt nur Daten — ein offener Tab (Dock-App!) fährt sonst ewig das
 // alte JS. Der Poll-Tick vergleicht diese Konstante gegen die aktuell servierte index.html
 // und lädt die Seite bei Abweichung neu. Bei jedem Frontend-Change hochzählen!
-const APP_VERSION = "2026-08-26c";
+const APP_VERSION = "2026-08-26d";
 
 // Escape + Mini-Markdown (nur inline: **fett**, *kursiv*, `code`, [Text](url)).
 // Faden-Turns und Kontext-Block sind keine Editierflächen — gerendertes HTML ist dort safe;
@@ -5453,25 +5450,6 @@ function openGcOverlay(loc, it) {
   ctx.appendChild(ctxHead);
   ctx.appendChild(ctxBody);
   ov.appendChild(ctx);
-
-  // The two orientation cards are documentation, not paid agent work. Give them a
-  // direct product CTA inside the ordinary card overlay; the prepared thread remains
-  // available for questions, but nobody has to spend a model round to find the tour.
-  if (/^(1 · Start here|4 · Understand agent runs)/.test(it.title || "")) {
-    const tour = el("div", "onboarding-tour");
-    const threadLesson = (it.title || "").startsWith("4 ·");
-    tour.appendChild(Object.assign(el("span"), { textContent: threadLesson
-      ? "Static guide · manual to-do vs Agent, standing thread, context cut and cache"
-      : "Static desktop tour · no agent run, login or model tokens" }));
-    const link = Object.assign(el("a"), {
-      href: "/onboarding-showcase" + (threadLesson ? "#threads" : ""),
-      target: "_blank",
-      rel: "noopener",
-      textContent: threadLesson ? "Open thread & cache guide ↗" : "Open desktop tour ↗",
-    });
-    tour.appendChild(link);
-    ov.appendChild(tour);
-  }
 
   // To-do-Block: seit 2026-08-11 sind die Bullets auf der Karte eingeklappt (☑-Badge) —
   // ihr Lese-Ort ist hier, direkt unter dem Kontext, als eigene Kategorie neben ihm.
@@ -7903,8 +7881,18 @@ function touched() {
 
 async function save(retried = false) {
   saveTimer = null;
+  // A second edit can land while the previous POST is still in flight. Sending both
+  // with the same base etag makes the conflict merge see the first server-assigned ID
+  // beside the still-ID-less local card and duplicate it. Serialize saves, then send
+  // the newest board once more with the etag returned by the first request.
+  if (saving && !retried) {
+    saveAgain = true;
+    return;
+  }
+  if (!retried) saving = true;
   if (locked) {
     status("⚠ Save blocked — file contains unreadable lines", "error");
+    if (!retried) saving = false;
     return;
   }
   try {
@@ -7962,7 +7950,7 @@ async function save(retried = false) {
           });
         }
         etag = fresh.etag;
-        return save(true);
+        return await save(true);
       }
       status("Conflict — changed externally; reloading", "error");
       return load();
@@ -7973,6 +7961,14 @@ async function save(retried = false) {
     status("✓ saved " + new Date().toTimeString().slice(0, 5), "saved");
   } catch {
     status("⚠ not saved — is the server down?", "error");
+  } finally {
+    if (!retried) {
+      saving = false;
+      if (saveAgain) {
+        saveAgain = false;
+        touched();
+      }
+    }
   }
 }
 

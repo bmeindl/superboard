@@ -90,6 +90,7 @@ test -d "$SB_SMOKE_WORKSPACE/.superboard/journal"
 # The first-run board must actually carry the onboarding journey, not just exist.
 # Assert the two things the product promises a new user on screen one.
 grep -q "^## Getting started" "$SB_SMOKE_WORKSPACE/inbox/board.md"
+grep -q "^## My to-dos" "$SB_SMOKE_WORKSPACE/inbox/board.md"
 grep -q "Start here" "$SB_SMOKE_WORKSPACE/inbox/board.md"
 grep -q "Superboard" "$SB_SMOKE_HTML"
 

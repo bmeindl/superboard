@@ -9,9 +9,11 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
 
 ## [0.1.0] — 2026-08-26 · first public alpha
 
-- A local Now / Next / Backlog board where every card keeps a standing agent thread.
-- Twelve concrete onboarding cards take a fresh workspace from orientation to its
-  first real to-dos, runner setup, Cockpit actions, and optional routines.
+- A local Now / Next / Backlog board where an ordinary to-do can stay manual or
+  become a standing conversation with an agent.
+- Thirteen concrete onboarding cards sit separately from an empty My to-dos area;
+  the agent-led introduction, first genuine task, runner setup, help, Cockpit
+  actions, and optional routines each have one clear outcome.
 - Claude Code is the supported default runner; Codex on macOS is experimental.
 - Plain Markdown and JSON remain the source of truth—no hosted account, database,
   or bundled model access.

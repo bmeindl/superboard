@@ -43,6 +43,14 @@ STARTER_HEADER = """# Board
 """
 
 STARTER_FOOTER = """
+## My to-dos
+
+### Now
+
+### Next
+
+### Backlog
+
 # To discuss
 
 # Notes

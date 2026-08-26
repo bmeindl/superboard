@@ -102,11 +102,13 @@ mechanics and generic starter sources, but it must not replace the user's board,
 actions, rituals, configuration, contract, or skills.
 
 First-run onboarding is data on that same boundary, not a separate state machine.
-Only a missing `board.md` produces one neutral topic and a seeded setup checklist:
-ordinary to-dos, each with its own id and one pending user turn. Static orientation
-and thread/cache lessons open directly from their card overlays without an agent run.
-The sequence then establishes the workspace boundary/context, imports real work,
-confirms the already-working agent/model profile, configures an explicit Off Duty
+Only a missing `board.md` produces two neutral topics: a seeded Getting started
+checklist and an empty My to-dos area that makes ordinary work visible from frame one.
+Each onboarding card has its own id and one pending user turn. The first prepared
+round opens the same-origin introduction; the UI itself injects no card-specific
+tour button. Runs, threads and cache are taught as a concrete agent-led to-do in
+plain language. The sequence then establishes the workspace boundary/context,
+creates one genuine normal card, explains settings/help, confirms the already-working agent/model profile, configures an explicit Off Duty
 projection and reveals the Cockpit payoff. Email digest, one routine and later
 thread-learning remain separate ordinary cards: optionality is expressed by completing
 or consciously skipping a concrete outcome, not by a generic chooser that creates more

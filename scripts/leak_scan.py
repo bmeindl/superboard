@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PATTERNS: list[tuple[str, str]] = [
     (r"/Users/[a-z0-9._-]+|/home/(?!runner\b)[a-z0-9._-]+", "absolute home path"),
     # Public no-reply identities are release metadata, not personal contact data.
-    (r"[a-z0-9._%+-]+@(?!anthropic\.com|users\.noreply\.github\.com|example\.(com|org))[a-z0-9.-]+\.[a-z]{2,}",
+    (r"(?<![a-z0-9._%+-])(?!noreply@github\.com\b)[a-z0-9._%+-]+@(?!anthropic\.com|users\.noreply\.github\.com|example\.(com|org))[a-z0-9.-]+\.[a-z]{2,}",
      "email address"),
     (r"\b(10|192\.168|172\.(1[6-9]|2\d|3[01])|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7]))"
      r"\.\d{1,3}\.\d{1,3}\b", "private network address"),

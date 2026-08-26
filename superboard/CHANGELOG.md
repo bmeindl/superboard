@@ -6,6 +6,28 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.21.5] — 2026-08-26
+- fix(release): allow GitHub merge noreply identity
+  History leak scans accept GitHub's exact synthetic merge identity
+  `GitHub <noreply@github.com>` while continuing to reject other github.com mail.
+
+## [6.21.4] — 2026-08-26
+- feat(onboarding): separate setup from real work
+  - Fresh workspaces now seed an empty `My to-dos` topic beside the finite
+    `Getting started` checklist, so ordinary work is visible without implying
+    that every card is an agent job.
+  - The first card now asks the agent to open the same-origin introduction and
+    keep the card thread available for questions; the hard-coded tour buttons
+    and opaque session-cut copy are gone.
+  - Dedicated task-shaped cards explain threads/cache and help/settings, while
+    the real-work step creates one approved manual card before offering an agent
+    hand-off.
+  - Normal cards receive their stable ID in the browser before their first save,
+    and board saves are serialized, so consecutive additions cannot churn IDs or
+    duplicate an ID-less local card during conflict recovery.
+  - The release workflow can now build and smoke safely on a pull request or
+    manual dispatch; PyPI publishing remains strictly tag-gated.
+
 ## [6.21.3] — 2026-08-26
 - fix(onboarding): keep renamed tour card linked
   Card 4's clearer title initially stopped matching the UI's direct-guide rule.
