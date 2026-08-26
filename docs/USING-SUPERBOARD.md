@@ -35,7 +35,7 @@ threads, and your configuration—is your data, so deleting it deletes your data
 
 The default Claude Code runner is supported on macOS and Ubuntu. The Codex runner
 is experimental and currently follows ChatGPT's macOS application path. OpenCode
-is not a supported runner in `0.1.0`; onboarding must not present it as available.
+is not yet a supported runner; onboarding must not present it as available.
 Windows has not passed the release smoke and is not supported in this alpha.
 
 ## Workspace-owned files
