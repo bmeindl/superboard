@@ -34,11 +34,15 @@ portable fallback.
 3. Use **2 · Set up this workspace**, then **3 · Add your first real to-do**.
    The agent adapts the foundation and puts one genuine card under My to-dos.
 4. The remaining cards each name one outcome—agent/model setup, Cockpit, email
-   digest, one routine, Off Duty, night rest or later thread learning—so you can
-   complete or skip them independently.
-5. Add more work whenever. `Enter` creates a manual card; `Cmd/Ctrl+Enter` creates it and
+   digest, one routine, Off Duty, night rest, later thread learning or the optional
+   inspiration page—so you can complete or skip them independently.
+5. The **Cockpit** tab is there from the start with one shipped action, **⬆️ Check for
+   updates**: an agent compares your install with the latest release, snapshots the
+   workspace in git first, updates, verifies, and tells you what is new. Your own
+   one-click actions join it as you ask for them.
+6. Add more work whenever. `Enter` creates a manual card; `Cmd/Ctrl+Enter` creates it and
    starts the agent.
-6. Finish onboarding. The final card archives the setup threads and removes the
+7. Finish onboarding. The final card archives the setup threads and removes the
    Getting started category.
 
 This is not a five-minute setup, and it does not pretend to be. A board becomes
