@@ -257,6 +257,12 @@ def test_fresh_cockpit_shows_the_shipped_update_card_and_zones_stay_compact() ->
     assert '(cockpitHidden() && view === "cockpit")' in html
     assert 'box.hidden = !populated' in html and 'head.hidden = !populated' in html
     assert "your one-click actions" in html
+    # The Cockpit is populated now, so `cockpitHidden()` no longer doubles as the
+    # rule that keeps a newcomer on the checklist. `hasInitialSetupMission()` must
+    # carry that alone — and it has to ignore the empty seeded "My to-dos" topic.
+    assert "const filled = board.themes.filter(t => COLS.some(c => (t.cols[c] || []).length))" in html
+    assert "if (filled.length !== 1) return false" in html
+    assert "if (firstViewWasImplicit && hasInitialSetupMission())" in html
 
 
 def test_onboarding_pages_are_same_origin_fictional_and_self_contained() -> None:

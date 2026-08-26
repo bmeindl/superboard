@@ -4885,7 +4885,7 @@ function closeGcOverlay({ restoreFocus = true } = {}) {
 // Frontend-Version: load() holt nur Daten — ein offener Tab (Dock-App!) fährt sonst ewig das
 // alte JS. Der Poll-Tick vergleicht diese Konstante gegen die aktuell servierte index.html
 // und lädt die Seite bei Abweichung neu. Bei jedem Frontend-Change hochzählen!
-const APP_VERSION = "2026-08-27a";
+const APP_VERSION = "2026-08-27b";
 
 // Escape + Mini-Markdown (nur inline: **fett**, *kursiv*, `code`, [Text](url)).
 // Faden-Turns und Kontext-Block sind keine Editierflächen — gerendertes HTML ist dort safe;
@@ -7202,10 +7202,15 @@ function setView(v) {
 // True only for a board nobody has touched yet: the seeded setup checklist, every
 // card still waiting for its first explicit run. One started card is enough to make
 // this false — we never re-decide a view for a workspace that is already in use.
+// Empty topics do not count: a fresh workspace also seeds "My to-dos" without cards,
+// and since the Cockpit ships one action it is no longer the hidden-tab fallback that
+// keeps a newcomer on the checklist — this check is.
 function hasInitialSetupMission() {
-  if (!board || board.themes.length !== 1) return false;
+  if (!board) return false;
+  const filled = board.themes.filter(t => COLS.some(c => (t.cols[c] || []).length));
+  if (filled.length !== 1) return false;
   const items = [];
-  board.themes.forEach(t => COLS.forEach(c => items.push(...(t.cols[c] || []))));
+  filled.forEach(t => COLS.forEach(c => items.push(...(t.cols[c] || []))));
   return items.length > 1 && items.every(it => threadStatus(it) === "for_gc");
 }
 
