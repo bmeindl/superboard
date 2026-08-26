@@ -7,7 +7,7 @@ you own.
 
 [![leak scan](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml/badge.svg?branch=main)](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml)
 
-![A fresh Superboard workspace with onboarding separate from ordinary to-dos](https://raw.githubusercontent.com/bmeindl/superboard/v0.1.0/docs/assets/superboard-hero.png)
+![Typing a task into the board, handing it to an agent, opening the card that came back with the answer, one that came back with a decision sheet, and ticking a card off](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-loop.gif)
 
 ```sh
 uvx superboard ~/Superboard
@@ -84,6 +84,8 @@ memory. A warm provider cache may reduce repeated tokens; a cold cache never
 loses work.
 
 ## How it works
+
+![A fresh Superboard workspace with onboarding separate from ordinary to-dos](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-hero.png)
 
 Superboard is the piece that holds your work and coordinates the agents doing it — a personal task host. The **board** is the visible surface — columns, cards, one glance. Each **card** is a task with its own standing thread: the full conversation between you and the agent working it, persistent across weeks. A **runner** executes — it picks up cards you've handed off, works headlessly, and reports back into the thread: results, or a short decision sheet when only you can decide. Underneath: plain local markdown files. No database, no account, no sync. The agent brings the intelligence; the files keep it honest.
 
