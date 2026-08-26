@@ -1,0 +1,75 @@
+name: clean macOS smoke test
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-macos:
+    name: macOS / Python ${{ matrix.python-version }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build and install the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          rm -rf dist
+          python -m pip wheel . --wheel-dir dist
+          test "$(ls dist/superboard-*.whl | wc -l)" -eq 1 || {
+            echo "::error::dist/ holds more than one wheel — cannot tell which is under test"
+            ls -la dist; exit 1
+          }
+          git rev-parse HEAD > dist/BUILD_SHA
+          python -m pip install --force-reinstall dist/superboard-*.whl
+
+      - name: Exercise a clean first start
+        shell: bash
+        env:
+          SB_SMOKE_ROOT: ${{ runner.temp }}
+          SB_SMOKE_LABEL: python-${{ matrix.python-version }}
+        run: |
+          set -euo pipefail
+          SB_SMOKE_PYTHON="$(command -v python)" scripts/smoke-installed.sh
+
+      - name: Record visible end-to-end proof
+        if: matrix.python-version == '3.13'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install playwright
+          python -m playwright install chromium
+          python scripts/record-installed-e2e.py --output evidence
+
+      - name: Upload visible proof
+        if: always() && matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-visible-e2e-python-${{ matrix.python-version }}
+          path: evidence/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-smoke-python-${{ matrix.python-version }}
+          path: |
+            ${{ runner.temp }}/superboard-python-${{ matrix.python-version }}.log
+            ${{ runner.temp }}/superboard-collision-python-${{ matrix.python-version }}.log
+            ${{ runner.temp }}/quick-capture-python-${{ matrix.python-version }}.json

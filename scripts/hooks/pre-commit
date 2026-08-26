@@ -1,0 +1,20 @@
+#!/bin/sh
+# Cheap. Keeps history clean so the push gate never has to say no.
+#
+# The pre-push hook is the one that protects the public; this one just keeps you
+# out of the situation where it fires. A leak caught here costs an edit. The same
+# leak caught at push time costs a history rewrite, because the commit that
+# introduced it stays readable via `git show` no matter what later commits do.
+#
+# Scans the working tree, not the index: this repo is worked by one person and by
+# agents that write files and commit them whole, so tree and index are the same
+# thing in practice, and scanning the tree also catches an untracked file that is
+# about to be added. Skip once with --no-verify if you are mid-thought; the push
+# gate still stands behind you.
+
+repo="$(git rev-parse --show-toplevel)"
+python3 "$repo/scripts/leak_scan.py" || {
+	echo >&2
+	echo "COMMIT BLOCKED — see above. Fix it now while it is still one edit." >&2
+	exit 1
+}

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "superboard"
+version = "0.1.0"
+description = "A personal task board where every to-do is a standing conversation thread with your agent."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Benjamin Meindl" }]
+keywords = ["kanban", "todo", "agent", "claude", "personal-task-host"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "Intended Audience :: End Users/Desktop",
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business :: Scheduling",
+]
+
+[project.urls]
+Homepage = "https://github.com/bmeindl/superboard"
+Documentation = "https://github.com/bmeindl/superboard#readme"
+Issues = "https://github.com/bmeindl/superboard/issues"
+Source = "https://github.com/bmeindl/superboard"
+
+[project.scripts]
+superboard = "superboard.__main__:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["superboard"]
+exclude = [
+  "superboard/test_*.py",
+  "superboard/conftest.py",
+  "superboard/pytest.ini",
+  "superboard/bump.py",
+  "superboard/make-icon.py",
+  "**/__pycache__",
+  "**/.pytest_cache",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["sandbox/.data", "**/__pycache__", "**/.pytest_cache"]

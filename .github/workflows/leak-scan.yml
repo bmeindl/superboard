@@ -1,0 +1,31 @@
+# The backstop, not the gate.
+#
+# scripts/hooks/pre-push is what actually prevents a leak — it runs before the
+# commits leave the machine. This runs after they arrive, so it cannot un-publish
+# anything. What it buys is the case the hook cannot cover: a push from a clone
+# where nobody ran install-hooks.sh, a --no-verify, a web edit, a contributor's
+# fork. It is the smoke detector; the hook is not leaving the stove on.
+#
+# It scans the full history of the pushed ref, not just the tip, because that is
+# what a clone can read — hence fetch-depth: 0. A shallow checkout would make the
+# whole job say "clean" for the wrong reason.
+name: leak scan
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  leak-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history — the surface a clone actually sees
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: working tree
+        run: python3 scripts/leak_scan.py
+      - name: history
+        run: python3 scripts/leak_scan.py --history HEAD

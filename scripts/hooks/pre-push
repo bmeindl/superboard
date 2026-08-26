@@ -1,0 +1,58 @@
+#!/bin/sh
+# THE gate. Everything else is a convenience.
+#
+# A push is the one irreversible step in this repo: the moment commits reach a
+# public remote, anything inside them has been published, and deleting it later
+# deletes nothing — clones, forks and caches keep it. So the check that matters
+# runs here, and it checks the surface that actually travels: every blob in the
+# commits being pushed, not the working tree.
+#
+# git hands us on stdin, one line per ref:
+#     <local ref> <local sha> <remote ref> <remote sha>
+#
+# and we translate that into the honest question "what becomes public if this
+# push succeeds?":
+#     new branch (remote sha all zeros) -> everything here that no remote has yet
+#     existing branch                   -> <remote sha>..<local sha>
+#     deletion    (local sha all zeros) -> nothing travels, nothing to scan
+#
+# Bypassable with --no-verify, like every git hook. That is why the same scan
+# also runs in CI (.github/workflows/leak-scan.yml) where nobody can skip it —
+# but CI runs AFTER the push, so it is the audit, not the gate. This is the gate.
+
+ZERO='0000000000000000000000000000000000000000'
+repo="$(git rev-parse --show-toplevel)"
+status=0
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+	[ -z "$local_sha" ] && continue
+	case "$local_sha" in "$ZERO") continue ;; esac   # branch deletion
+
+	case "$remote_sha" in
+		"$ZERO") set -- "$local_sha" --not --remotes ;;   # first push of this branch
+		*)       set -- "$remote_sha..$local_sha" ;;
+	esac
+
+	echo "leak scan: $* "
+	python3 "$repo/scripts/leak_scan.py" --history "$@" || status=1
+done
+
+if [ "$status" -ne 0 ]; then
+	cat >&2 <<-'MSG'
+
+	PUSH BLOCKED — private content in the commits you are about to publish.
+
+	The working tree may well be clean; that is not the surface a clone sees.
+	Fix the content, then rewrite the commits that carry it. For a repo whose
+	history has never been pushed, the cheapest fix is to drop the history:
+
+	    git checkout --orphan clean && git add -A && git commit
+	    git branch -M clean main
+
+	Genuinely a false positive? Record it as an allow-entry — in ALLOW in
+	scripts/leak_scan.py if it is generic, in .leakpatterns if it is yours.
+	Never --no-verify: that leaves no trace of the decision.
+	MSG
+fi
+
+exit "$status"

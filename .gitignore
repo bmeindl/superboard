@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# runtime data (never belongs in the repo)
+.superboard/
+sandbox/.data/
+sandbox/inbox/gc-threads/
+sandbox/inbox/gc-receipts/
+sandbox/inbox/board-archive.md
+journal/
+usage-log.jsonl
+git-anchor.json
+killed-runs.jsonl
+killed/
+thread-search.sqlite
+board.config.json
+dist/
+# resolver artefact of `uv run --with …` during testing, not a project lock
+uv.lock
+.testrig/
+# browser profile the UI smoke test creates next to the package
+board-smoke/
+# private leak-scan vocabulary (symlink into a private repo) — never publish
+.leakpatterns

@@ -1,0 +1,18 @@
+{
+  "_comment": "Instance configuration. Superboard copies this once to board.config.json in the workspace. Existing files are never overwritten. Only put in what genuinely differs between two installations.",
+  "owner": {
+    "name": "You",
+    "agent": "Agent"
+  },
+  "identities": {
+    "gitlab": [],
+    "github": []
+  },
+  "night_pause": {
+    "enabled": false
+  },
+  "off_duty": {
+    "hidden_topics": [],
+    "visible_topics": []
+  }
+}
