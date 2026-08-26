@@ -48,7 +48,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.21.4"
+VERSION = "6.21.5"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets

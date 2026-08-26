@@ -6,6 +6,11 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.21.5] — 2026-08-26
+- fix(release): allow GitHub merge noreply identity
+  History leak scans accept GitHub's exact synthetic merge identity
+  `GitHub <noreply@github.com>` while continuing to reject other github.com mail.
+
 ## [6.21.4] — 2026-08-26
 - feat(onboarding): separate setup from real work
   - Fresh workspaces now seed an empty `My to-dos` topic beside the finite

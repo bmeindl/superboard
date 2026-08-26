@@ -23,6 +23,16 @@ def test_commit_metadata_rejects_personal_email_and_allows_public_noreply() -> N
         "Author: Person <123+person@users.noreply.github.com>",
         compiled,
     )
+    assert not leak_scan.scan_text(
+        ".git-commit-metadata",
+        "Committer: GitHub <noreply@github.com>",
+        compiled,
+    )
+    assert leak_scan.scan_text(
+        ".git-commit-metadata",
+        "Committer: Impostor <person" + "@github.com>",
+        compiled,
+    )
 
 
 def test_history_metadata_reads_reachable_commit_objects(monkeypatch) -> None:
