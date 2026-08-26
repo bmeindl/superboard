@@ -65,7 +65,9 @@ SYNTH = ("## SmokeThema\n\n### Jetzt\n\n- [ ] Smoke-Item *(2026-07-10)*\n"
          "  @gc: Smoke-Frage\n"
          "  @gc-re: [Open README](README.md) · "
          f"[Absolute README]({ABS_README})\n\n"
-         "### Bald\n\n### Geparkt\n\n# Personen\n\n# Notizen\n")
+         "### Bald\n\n### Geparkt\n\n"
+         "## My to-dos\n\n### Jetzt\n\n### Bald\n\n### Geparkt\n\n"
+         "# Personen\n\n# Notizen\n")
 
 FAILS: list[str] = []
 
@@ -123,6 +125,36 @@ def main() -> int:
         check("smoke: Board-Daten gerendert (Thema sichtbar)", "SmokeThema" in body)
         ver = ab("eval", "document.body.innerText.match(/Build \\d+\\.\\d+\\.\\d+/)?.[0] || ''").stdout
         check("smoke: Version im DOM (API /api/board kam durch)", f"Build {server.VERSION}" in ver)
+
+        # Consecutive manual saves must preserve the browser-assigned IDs. Previously
+        # the first card stayed ID-less in this tab; the next save could then treat the
+        # server's copy as a second card during conflict recovery.
+        add_manual = """
+          (() => {
+            const input = [...document.querySelectorAll('.adder')].find(a => {
+              const loc = JSON.parse(a.dataset.loc || '{}');
+              return loc.kind === 't' && loc.ti === 1 && loc.col === 'Jetzt';
+            });
+            if (!input) return false;
+            input.value = %s;
+            input.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'Enter', bubbles: true, cancelable: true
+            }));
+            return true;
+          })()
+        """
+        first_add = ab("eval", add_manual % json.dumps("First normal task"))
+        ab("wait", "700")
+        second_add = ab("eval", add_manual % json.dumps("Second normal task"))
+        ab("wait", "700")
+        saved = server.parse_board(Path(tmp).read_text())
+        normal = next(t for t in saved["themes"] if t["name"] == "My to-dos")
+        cards = normal["cols"]["Jetzt"]
+        check("smoke: two manual cards keep two stable IDs",
+              first_add.returncode == second_add.returncode == 0
+              and [card["title"] for card in cards] == ["First normal task", "Second normal task"]
+              and len({card["id"] for card in cards}) == 2
+              and all(re.fullmatch(r"[0-9a-f]{12}", card["id"]) for card in cards))
 
         # Absolut ist nur Schreibkomfort: derselbe default-deny Viewer muss die Repo-Datei
         # liefern und eine existierende Datei AUSSERHALB des Repos weiter ablehnen.
