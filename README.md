@@ -7,7 +7,7 @@ you own.
 
 [![leak scan](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml/badge.svg?branch=main)](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml)
 
-![Typing a task into the board, handing it to an agent, opening the card that came back with the answer, one that came back with a decision sheet, and ticking a card off](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-loop.gif)
+![Typing a task into the board, handing it to an agent, answering a decision sheet in a card that came back, sending the agent on, reading the result, and ticking the card off](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-loop.gif)
 
 ```sh
 uvx superboard ~/Superboard
