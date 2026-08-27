@@ -7,7 +7,7 @@ you own.
 
 [![leak scan](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml/badge.svg?branch=main)](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml)
 
-![A fresh Superboard workspace with onboarding separate from ordinary to-dos](https://raw.githubusercontent.com/bmeindl/superboard/v0.1.0/docs/assets/superboard-hero.png)
+![Typing a task into the board, handing it to an agent, answering a decision sheet in a card that came back, sending the agent on, reading the result, and ticking the card off](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-loop.gif)
 
 ```sh
 uvx superboard ~/Superboard
@@ -34,11 +34,15 @@ portable fallback.
 3. Use **2 · Set up this workspace**, then **3 · Add your first real to-do**.
    The agent adapts the foundation and puts one genuine card under My to-dos.
 4. The remaining cards each name one outcome—agent/model setup, Cockpit, email
-   digest, one routine, Off Duty, night rest or later thread learning—so you can
-   complete or skip them independently.
-5. Add more work whenever. `Enter` creates a manual card; `Cmd/Ctrl+Enter` creates it and
+   digest, one routine, Off Duty, night rest, later thread learning or the optional
+   inspiration page—so you can complete or skip them independently.
+5. The **Cockpit** tab is there from the start with one shipped action, **⬆️ Check for
+   updates**: an agent compares your install with the latest release, snapshots the
+   workspace in git first, updates, verifies, and tells you what is new. Your own
+   one-click actions join it as you ask for them.
+6. Add more work whenever. `Enter` creates a manual card; `Cmd/Ctrl+Enter` creates it and
    starts the agent.
-6. Finish onboarding. The final card archives the setup threads and removes the
+7. Finish onboarding. The final card archives the setup threads and removes the
    Getting started category.
 
 This is not a five-minute setup, and it does not pretend to be. A board becomes
@@ -55,7 +59,7 @@ a time, previewed first, and then customized locally.
   has not been verified and is not supported in this alpha.
 - Claude Code installed and authenticated for the supported default runner.
 - Codex is an experimental macOS runner and uses the CLI bundled with ChatGPT.
-  OpenCode is not a supported runner in `0.1.0`.
+  OpenCode is not yet a supported runner.
 - Provider usage: Superboard does not include model access or tokens.
 
 The board still opens without an agent CLI, but hand-offs cannot run — and it
@@ -85,6 +89,8 @@ loses work.
 
 ## How it works
 
+![A fresh Superboard workspace with onboarding separate from ordinary to-dos](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-hero.png)
+
 Superboard is the piece that holds your work and coordinates the agents doing it — a personal task host. The **board** is the visible surface — columns, cards, one glance. Each **card** is a task with its own standing thread: the full conversation between you and the agent working it, persistent across weeks. A **runner** executes — it picks up cards you've handed off, works headlessly, and reports back into the thread: results, or a short decision sheet when only you can decide. Underneath: plain local markdown files. No database, no account, no sync. The agent brings the intelligence; the files keep it honest.
 
 ## The first weeks
@@ -97,7 +103,7 @@ The mechanics work on day one: board, runner, standing threads, decision sheets,
 
 ## Where this goes
 
-Today, Superboard is a board. The direction is a working morning that starts with three prepared items instead of forty open loops — everything else researched, built, filed, or consciously not started while you were away, each weighed in the open against priorities you set. Questions that get sharper the longer you work together. And because everything it learns lives in inspectable files, changing models doesn't have to mean starting over. That's the target narrative, told honestly as direction — the full version is in [PITCH.md](https://github.com/bmeindl/superboard/blob/v0.1.0/PITCH.md). This board is step one of exactly it.
+Today, Superboard is a board. The direction is a working morning that starts with three prepared items instead of forty open loops — everything else researched, built, filed, or consciously not started while you were away, each weighed in the open against priorities you set. Questions that get sharper the longer you work together. And because everything it learns lives in inspectable files, changing models doesn't have to mean starting over. That's the target narrative, told honestly as direction — the full version is in [PITCH.md](https://github.com/bmeindl/superboard/blob/v0.2.0/PITCH.md). This board is step one of exactly it.
 
 ## Start here, then ask the agent
 
@@ -105,13 +111,13 @@ The board and its onboarding cards are the primary product documentation. The
 README deliberately stops at orientation; users should not need to study a
 manual before doing useful work.
 
-- [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.1.0/docs/USING-SUPERBOARD.md) — installation, workspace files,
+- [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.2.0/docs/USING-SUPERBOARD.md) — installation, workspace files,
   onboarding behavior, customization, and restart rules.
-- [Development and test rigs](https://github.com/bmeindl/superboard/blob/v0.1.0/docs/DEVELOPMENT.md) — sandbox, fresh-wheel test,
+- [Development and test rigs](https://github.com/bmeindl/superboard/blob/v0.2.0/docs/DEVELOPMENT.md) — sandbox, fresh-wheel test,
   and privacy gates.
-- [Architecture](https://github.com/bmeindl/superboard/blob/v0.1.0/superboard/ARCHITEKTUR.md) — contracts and trust boundaries for
+- [Architecture](https://github.com/bmeindl/superboard/blob/v0.2.0/superboard/ARCHITEKTUR.md) — contracts and trust boundaries for
   agents and contributors.
-- [Product direction](https://github.com/bmeindl/superboard/blob/v0.1.0/PITCH.md) · [Support posture](https://github.com/bmeindl/superboard/blob/v0.1.0/SUPPORT.md)
+- [Product direction](https://github.com/bmeindl/superboard/blob/v0.2.0/PITCH.md) · [Support posture](https://github.com/bmeindl/superboard/blob/v0.2.0/SUPPORT.md)
 
 Superboard is alpha-stage personal tooling, not a hosted multi-user project
 manager or a supported service. The point is a small, understandable frame that
@@ -119,4 +125,4 @@ your own agent and workspace can grow into.
 
 ## License
 
-MIT — see [LICENSE](https://github.com/bmeindl/superboard/blob/v0.1.0/LICENSE).
+MIT — see [LICENSE](https://github.com/bmeindl/superboard/blob/v0.2.0/LICENSE).

@@ -6,6 +6,26 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.22.0] — 2026-08-27
+- feat(onboarding): board-look pages and a shipped update card
+  - The introduction, the walkthrough and a new inspiration page are rebuilt in the
+    board's own visual language and served same-origin from the package:
+    `/welcome` (card 1), `/onboarding-showcase` ("Find your way around", keeping its
+    path and the `#threads`/`#off-duty` anchors seeded cards link to) and
+    `/inspiration`. All three are self-contained — no external asset, no request.
+  - New optional starter card `13 · Get more from Superboard` opens `/inspiration`;
+    the closer moves to `14 · Finish Getting started`. Card 4 now links the
+    `#threads` section, and card 2 makes the workspace a git repository when it is
+    not one yet (`git init` plus a first commit, decided rather than asked).
+  - The Cockpit ships exactly one action, `superboard-update` — an agentic
+    "Check for updates" card that snapshots the workspace in git, compares the
+    installed package against PyPI, installs, verifies, merges local drift itself and
+    closes with a short note on what is new. Its skill is seeded create-only to
+    `.claude/skills/superboard-update/SKILL.md`, so a stranger's first click works.
+  - Because one action ships, the Cockpit tab is present from the first start:
+    card 7 now customizes an existing Cockpit instead of conjuring it. The
+    zero-actions predicate stays for the workspace that deletes every card.
+
 ## [6.21.5] — 2026-08-26
 - fix(release): allow GitHub merge noreply identity
   History leak scans accept GitHub's exact synthetic merge identity

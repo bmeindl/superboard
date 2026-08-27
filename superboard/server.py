@@ -48,7 +48,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.21.5"
+VERSION = "6.22.0"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -4083,8 +4083,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path in ("/", "/index.html"):
             self._send(200, read_index_html(), "text/html; charset=utf-8")
+        # Three static, self-contained onboarding pages. `/onboarding-showcase` is the
+        # walkthrough ("Find your way around") and keeps its historic path plus the
+        # `#threads`/`#off-duty` anchors that seeded cards deep-link to; `/welcome` is
+        # the one-minute introduction card 1 opens, `/inspiration` the optional
+        # "Get more from Superboard" page. All three are packaged fictional data.
+        elif self.path in ("/welcome", "/welcome.html"):
+            self._send(200, (ROOT / "welcome.html").read_bytes(),
+                       "text/html; charset=utf-8")
         elif self.path in ("/onboarding-showcase", "/onboarding-showcase.html"):
             self._send(200, (ROOT / "onboarding-showcase.html").read_bytes(),
+                       "text/html; charset=utf-8")
+        elif self.path in ("/inspiration", "/inspiration.html"):
+            self._send(200, (ROOT / "inspiration.html").read_bytes(),
                        "text/html; charset=utf-8")
         elif self.path == "/testrig" or self.path.startswith("/testrig?"):
             self._send(200, TESTRIG_PAGE.encode(), "text/html; charset=utf-8")

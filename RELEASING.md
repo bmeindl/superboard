@@ -85,3 +85,7 @@ README claim nobody verified this round.
   and same-artifact build/smoke/publish contract.
 - 2026-08-26 · added commit-metadata privacy and curated GitHub release notes after
   the final launch challenge found that clean blobs were not the whole public surface.
+- 2026-08-27 · 0.2.0: a release PR opened right after its branch push did not get the
+  required `macOS / Python` pull_request checks; a follow-up commit on the branch
+  (this line) triggers them. Version bump and RELEASES.md were edited by hand when
+  the port script could not run — same result, check `pyproject.toml` twice.

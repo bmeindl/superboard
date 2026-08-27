@@ -67,7 +67,7 @@ def test_first_card_is_an_agent_led_introduction_not_a_readme_round() -> None:
     _col, title, short, mission, _ask = cli.STARTER_ITEMS[0]
     assert "Start here" in title and "Meet Superboard" in title
     assert "Press ▶ Agent once" in short
-    assert "GC_BOARD_URL" in mission and "/onboarding-showcase" in mission
+    assert "GC_BOARD_URL" in mission and "/welcome" in mission
     assert "open` on macOS" in mission and "xdg-open" in mission
     assert "--docs readme" not in mission
 
@@ -194,7 +194,7 @@ def test_runner_status_is_exposed_and_rendered() -> None:
 def test_the_first_real_hand_off_follows_the_introduction() -> None:
     cli = _cli_module()
     titles = [title for _c, title, _s, _m, _a in cli.STARTER_ITEMS]
-    assert 8 <= len(titles) <= 13, "the checklist stays finite without bundling setup"
+    assert 8 <= len(titles) <= 14, "the checklist stays finite without bundling setup"
     assert "Start here" in titles[0]
     assert "Set up this workspace" in titles[1]
     assert "Add your first real to-do" in titles[2]
@@ -209,6 +209,7 @@ def test_setup_concerns_are_concrete_and_cockpit_is_in_now() -> None:
     assert "8 · Set up an email digest" in titles
     assert "9 · Set up one routine" in titles
     assert "12 · Let Superboard learn from your threads" in titles
+    assert "13 · Get more from Superboard" in titles
     assert not any("optional setup" in title.lower() for title in titles)
     cockpit = next(item for item in _cli_module().STARTER_ITEMS if "Cockpit" in item[1])
     assert cockpit[0] == "Jetzt"
@@ -234,36 +235,70 @@ def test_cockpit_setup_creates_extension_before_any_write() -> None:
     assert "Cockpit extension · Add a useful recurring action" in cockpit
     assert cockpit.index("FIRST") < cockpit.index("Inventory")
     assert "approval artifact before editing actions.json" in cockpit
-    assert "Cockpit tab has appeared" in cockpit
+    # The Cockpit is no longer conjured by this card: it ships with one action.
+    assert "Cockpit tab is already there" in cockpit
+    assert "customizes an existing Cockpit" in cockpit
+    assert "Cockpit tab has appeared" not in cockpit
 
 
-def test_fresh_cockpit_is_hidden_and_configured_zones_are_compact() -> None:
+def test_fresh_cockpit_shows_the_shipped_update_card_and_zones_stay_compact() -> None:
+    """The empty-Cockpit rule was superseded (2026-08-26): keeping Superboard current
+    is a job every workspace has, so exactly one action ships and the tab is there from
+    day one. The predicate stays for the case where a user deletes every action."""
+    import json
+
+    actions = json.loads((HERE / "actions.json").read_text(encoding="utf-8"))["actions"]
+    assert [a["key"] for a in actions] == ["superboard-update"]
+    assert actions[0]["group"] == "maintenance"
+    assert ".claude/skills/superboard-update/SKILL.md" in actions[0]["prompt"]
     html = (HERE / "index.html").read_text(encoding="utf-8")
     assert "const cockpitHidden = () => !actionsDefs || actionsDefs.length === 0" in html
     assert 'set("cockpit", cockpitHidden())' in html
     assert '(cockpitHidden() && view === "cockpit")' in html
     assert 'box.hidden = !populated' in html and 'head.hidden = !populated' in html
     assert "your one-click actions" in html
+    # The Cockpit is populated now, so `cockpitHidden()` no longer doubles as the
+    # rule that keeps a newcomer on the checklist. `hasInitialSetupMission()` must
+    # carry that alone — and it has to ignore the empty seeded "My to-dos" topic.
+    assert "const filled = board.themes.filter(t => COLS.some(c => (t.cols[c] || []).length))" in html
+    assert "if (filled.length !== 1) return false" in html
+    assert "if (firstViewWasImplicit && hasInitialSetupMission())" in html
 
 
-def test_showcase_is_same_origin_and_fictional() -> None:
+def test_onboarding_pages_are_same_origin_fictional_and_self_contained() -> None:
     server_source = (HERE / "server.py").read_text(encoding="utf-8")
-    showcase = (HERE / "onboarding-showcase.html").read_text(encoding="utf-8")
-    assert '"/onboarding-showcase"' in server_source
-    assert "Fictional workspace" in showcase and "no personal data" in showcase
+    pages = {name: (HERE / f"{name}.html").read_text(encoding="utf-8")
+             for name in ("welcome", "onboarding-showcase", "inspiration")}
+    for name, page in pages.items():
+        assert f'"/{name}"' in server_source, f"{name} needs a same-origin route"
+        assert "Fictional workspace" in page and "no personal data" in page
+        # Self-contained: no request may leave the local server when the page opens.
+        assert "src=" not in page and "<link" not in page
+        assert "http://" not in page and "https://" not in page
+
+    welcome = pages["welcome"]
+    assert "Now / Next / Backlog" in welcome
+    assert "A card is just a to-do" in welcome
+
+    showcase = pages["onboarding-showcase"]
     assert "desktop layout" in showcase
-    assert all(f'<div class="head">{column}</div>' in showcase for column in ("NOW", "NEXT", "BACKLOG"))
-    assert 'id="threads"' in showcase
+    # Seeded cards deep-link to these anchors; they are part of the route contract.
+    assert 'id="threads"' in showcase and 'id="off-duty"' in showcase and 'id="cockpit"' in showcase
     assert "Sync activity tracker" in showcase
-    assert 'id="off-duty"' in showcase
     assert "A card is a to-do first" in showcase
     assert "Keep one thread for one outcome" in showcase
-    assert "cut the session when the outcome changes" not in showcase
+
+    inspiration = pages["inspiration"]
+    assert "Get more from" in inspiration
+    # The Cockpit is no longer empty on a fresh install — the page must not claim it is.
+    assert "Empty at first" not in inspiration
+    assert "Check for updates" in inspiration
 
 
 def test_help_and_thread_lessons_are_task_shaped_and_agent_led() -> None:
     missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
     thread_lesson = missions["4 · Understand runs, threads and cache"]
+    assert "/onboarding-showcase#threads" in thread_lesson
     assert "current card as the example" in thread_lesson
     assert "prompt cache is only an efficiency" in thread_lesson
     assert "different outcome" in thread_lesson
@@ -288,6 +323,7 @@ def test_manual_cards_are_the_baseline_and_overlapping_saves_are_serialized() ->
 def test_off_duty_uses_explicit_topics_and_keeps_unknown_topics_visible() -> None:
     missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
     mission = missions["10 · Set up an off-duty view"]
+    assert "/onboarding-showcase#off-duty" in mission
     assert "off_duty.hidden_topics" in mission and "off_duty.visible_topics" in mission
     assert "unknown or future topics remain visible" in mission
     source = (HERE / "index.html").read_text(encoding="utf-8")

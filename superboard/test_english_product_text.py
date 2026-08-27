@@ -173,15 +173,18 @@ def test_fresh_workspace_and_onboarding_use_one_public_vocabulary() -> None:
     )
     assert "Now/Soon/Parked" not in public and "Now / Soon / Parked" not in public
     showcase = (HERE / "onboarding-showcase.html").read_text(encoding="utf-8")
+    welcome = (HERE / "welcome.html").read_text(encoding="utf-8")
     guide = (HERE.parent / "docs" / "USING-SUPERBOARD.md").read_text(encoding="utf-8")
-    assert "Now / Next / Backlog" in showcase
+    assert "Now / Next / Backlog" in showcase and "Now / Next / Backlog" in welcome
     assert "| Now | Next | Backlog |" in guide
 
 
 def test_checked_in_registries_are_valid_and_user_fields_are_english() -> None:
     actions, action_errors = registries.load_actions(HERE / "actions.json")
     rituals, ritual_errors = registries.load_rituals(HERE / "rituals.json")
-    assert action_errors == [] and actions == []
+    assert action_errors == []
+    # Exactly one bundled action: keeping Superboard current is not personal taste.
+    assert [a["key"] for a in actions] == ["superboard-update"]
     # rituals.json ships empty in this fresh extraction (no baked-in rituals);
     # only assert it loads clean, not that it has entries.
     assert ritual_errors == []

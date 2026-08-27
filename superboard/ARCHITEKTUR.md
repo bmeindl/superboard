@@ -120,13 +120,26 @@ ritual registries stay empty. A browser with no saved tab choice lands on To-dos
 is still unstarted, so the checklist is visible. Restarting does not recreate it,
 and after the first render the ordinary persisted tab choice wins.
 
-The Cockpit is capability-revealed, not an empty product shell. `/api/actions` is
-loaded before tab selection; zero valid actions means no Cockpit tab, while a
-configured Cockpit renders only zones containing actions. Base setup must first
-idempotently ensure one extension card, inventory only non-secret capability
-metadata, and obtain approval before surgically editing `actions.json`. The same-origin
-`/onboarding-showcase` is packaged fictional data: it can explain customization
-without leaking or seeding the maintainer's personal or work data.
+The Cockpit exists from the first start, but it is still capability-revealed rather
+than a product shell. Exactly one action ships — `superboard-update`, the agentic
+"Check for updates" card — because keeping the tool current is a job every workspace
+has; everything else is personal and is learned during onboarding. `/api/actions` is
+loaded before tab selection, and a configured Cockpit renders only zones containing
+actions, so a fresh install shows one zone rather than five empty ones. The
+zero-actions predicate remains for the workspace that deletes every card. The update
+card is only a prompt: it names `.claude/skills/superboard-update/SKILL.md`, which is
+seeded create-only from the package like every other starter file, so a stranger's
+first click has a skill to load. Base setup must still idempotently ensure one
+extension card, inventory only non-secret capability metadata, and obtain approval
+before surgically editing `actions.json`.
+
+Three same-origin static pages carry the packaged fictional walkthrough data, so they
+can explain customization without leaking or seeding the maintainer's personal or work
+data: `/welcome` (the one-minute introduction card 1 opens), `/onboarding-showcase`
+(the "Find your way around" deep dive, whose `#threads` and `#off-duty` anchors seeded
+cards link to — the path is kept for that reason) and `/inspiration` (the optional
+"Get more from Superboard" page). All three are self-contained: no external asset, no
+outbound request.
 
 Scheduled triage is fail-soft and gets one automatic attempt per slot. Its model
 contract uses a flat JSON object; conservative closing-bracket repair handles a

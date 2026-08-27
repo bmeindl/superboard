@@ -35,7 +35,7 @@ threads, and your configuration—is your data, so deleting it deletes your data
 
 The default Claude Code runner is supported on macOS and Ubuntu. The Codex runner
 is experimental and currently follows ChatGPT's macOS application path. OpenCode
-is not a supported runner in `0.1.0`; onboarding must not present it as available.
+is not yet a supported runner; onboarding must not present it as available.
 Windows has not passed the release smoke and is not supported in this alpha.
 
 ## Workspace-owned files
@@ -46,6 +46,7 @@ actions.json                           one-click cockpit jobs
 rituals.json                           optional daily/weekly prompts
 board.config.json                      local labels and optional behavior switches
 .claude/skills/superboard/SKILL.md     the agent's workspace-admin guide
+.claude/skills/superboard-update/SKILL.md   the skill the update card loads
 superskills/                           optional separate catalogue checkout
 .superboard/                           runtime journals and disposable caches
 ```
@@ -56,30 +57,35 @@ a file the user already owns.
 ## First-run journey
 
 A fresh browser opens the normal To-dos view with separate Getting started and
-My to-dos categories. Getting started has thirteen numbered cards; My to-dos is
+My to-dos categories. Getting started has fourteen numbered cards; My to-dos is
 empty and ready for ordinary work. Each onboarding title names the outcome; there is no generic
 "optional setup" gate hiding several unrelated jobs:
 
 | Now | Next | Backlog |
 | --- | --- | --- |
-| 1 · Start here · Meet Superboard | 8 · Set up an email digest | 13 · Finish Getting started |
+| 1 · Start here · Meet Superboard | 8 · Set up an email digest | 14 · Finish Getting started |
 | 2 · Set up this workspace | 9 · Set up one routine | |
 | 3 · Add your first real to-do | 10 · Set up an off-duty view | |
 | 4 · Understand runs, threads and cache | 11 · Turn on night rest | |
 | 5 · Find settings and get help | 12 · Let Superboard learn from your threads | |
-| 6 · Check your agent and model setup | | |
+| 6 · Check your agent and model setup | 13 · Get more from Superboard | |
 | 7 · Set up your Cockpit | | |
 
 Opening a card spends no model tokens. Card 1 asks the user to press `▶ Agent` once;
-that round opens the same-origin introduction and keeps follow-up questions in the
-card. Card 4 explains runs, threads, new sessions and cache using its own task as the
-example. `✓ Done` completes a card; the checkbox remains available for immediate undo
+that round opens the same-origin introduction at `/welcome` and keeps follow-up
+questions in the card. Card 4 explains runs, threads, new sessions and cache using its
+own task as the example and links the illustrated version at
+`/onboarding-showcase#threads`. Card 13 is optional inspiration: it opens
+`/inspiration`, which explains what the Cockpit is and shows four things people rarely
+think to ask for. `✓ Done` completes a card; the checkbox remains available for immediate undo
 until reload. Setup cards are guidance, not gates, except that the final cleanup
 card requires the other cards to be completed or consciously skipped. It then
 archives their cards and threads before removing the topic.
 
 Set up this workspace stays about its path, boundaries, context foundation and
-board topics. It neither audits agent CLIs nor connects integrations. In a narrow
+board topics. It also makes the workspace a git repository when it is not one yet —
+`git init` plus a first commit, decided and done rather than asked, so every later
+change stays diffable and revertible. It neither audits agent CLIs nor connects integrations. In a narrow
 repository that already contains work, it must explain that a restart elsewhere
 does not move cards, threads or spend history and present an approved recovery plan.
 Agent and model readiness has its own card. It confirms the platform and run
@@ -91,13 +97,22 @@ The optional Off Duty setup stores exact hidden and visible topic names in
 `board.config.json` only after approval. The toggle changes the local projection,
 not the board; unclassified and newly created topics remain visible.
 
-A fresh workspace has no Cockpit tab or empty zone shell. Card 7 sits in Now after
-the workspace has context. The tab appears after
-at least one valid action exists, with only populated action zones. The base-setup
-round first creates one idempotent extension card, then proposes 2–4 actions whose
-skills, CLIs, and authorization boundaries it has actually verified. The visual
-tour includes fictional maintenance, knowledge, and personal-sports Cockpits;
-it never seeds those examples or their data into the workspace.
+The Cockpit tab is there from the first start, holding exactly one shipped action:
+⬆️ Check for updates. Clicking it is the order to install — an agent compares the
+installed package with the latest release, makes the workspace a git repository and
+commits it first so the step is revertible, merges the update with local changes
+itself, asks only when a conflict is genuinely unresolvable, and closes with a short
+note on what is new. It never writes to `actions.json`, `rituals.json`,
+`board.config.json`, `inbox/board.md` or the thread files. Because that one card
+exists, a fresh Cockpit shows one populated zone rather than five empty ones; delete
+every action and the tab disappears again.
+
+Card 7 therefore customizes an existing Cockpit rather than creating one. It sits in
+Now after the workspace has context. The base-setup round first creates one idempotent
+extension card, then proposes 2–4 actions whose skills, CLIs, and authorization
+boundaries it has actually verified. The visual tour includes fictional maintenance,
+knowledge, and personal-sports Cockpits; it never seeds those examples or their data
+into the workspace.
 
 Optional catalogue skills are never bundled, installed, or updated silently.
 The agent previews the selected skill, copies it into the workspace-owned skill

@@ -3133,7 +3133,13 @@ const ACTION_MARKS = {
   "................","................","..#.............","..#....##.......",
   "..#....##.......","..#....##.......","..#....##..##...","..#....##..##...",
   "..#.##.##..##...","..#.##.##..##...","..#.##.##..##...","..#.##.##..##...",
-  "..#.##.##..##...","..###########...","................","................"]
+  "..#.##.##..##...","..###########...","................","................"],
+  // Arrow into a tray — check for updates (the one shipped action)
+  "superboard-update":[
+  "................",".......##.......","......####......",".....######.....",
+  "....########....","...##########...","......####......","......####......",
+  "......####......","......####......","......####......","................",
+  "..############..","..############..","................","................"]
 };
 // Schloss-Marke für auth-Actions (ersetzt das 🔐-Emoji hinter dem Label)
 const AUTH_MARK = [
@@ -4879,7 +4885,7 @@ function closeGcOverlay({ restoreFocus = true } = {}) {
 // Frontend-Version: load() holt nur Daten — ein offener Tab (Dock-App!) fährt sonst ewig das
 // alte JS. Der Poll-Tick vergleicht diese Konstante gegen die aktuell servierte index.html
 // und lädt die Seite bei Abweichung neu. Bei jedem Frontend-Change hochzählen!
-const APP_VERSION = "2026-08-26d";
+const APP_VERSION = "2026-08-27b";
 
 // Escape + Mini-Markdown (nur inline: **fett**, *kursiv*, `code`, [Text](url)).
 // Faden-Turns und Kontext-Block sind keine Editierflächen — gerendertes HTML ist dort safe;
@@ -6180,6 +6186,9 @@ function syncFocusMode() {
 // erklaert. Gleiche Namenskonvention wie die Matrix (isDevTheme) — keine neue
 // Konfigurationsebene, keine Einstellung.
 const devHidden = () => !board || !board.themes.some(isDevTheme);
+// Superboard ships one action ("Check for updates"), so on a fresh install this is
+// false and the Cockpit tab is there from the start. The predicate stays because a
+// user may delete every action — an empty five-zone shell is still the wrong answer.
 const cockpitHidden = () => !actionsDefs || actionsDefs.length === 0;
 // Nur die Sichtbarkeit; der Fallback aus einem verschwundenen Tab steht in load(), damit
 // render() sich nicht selbst ueber setView() erneut aufruft.
@@ -6646,9 +6655,9 @@ async function renderActions() {
     orphans.forEach(a => grid.appendChild(buildCard(a, "")));
     boxes[0].node.appendChild(grid);
   }
-  // Once configured, render only zones that contain actions. A fresh workspace
-  // has no Cockpit tab at all; these empty invitations therefore never become a
-  // five-zone shell the user has to interpret before setup.
+  // Render only zones that contain actions. A fresh workspace shows exactly one
+  // zone (maintenance, holding the shipped update card); these empty invitations
+  // therefore never become a five-zone shell the user has to interpret before setup.
   ACTION_ZONES.forEach(z => {
     const populated = actionsDefs.some(a => a.group === z.key);
     const box = $(z.box);
@@ -7193,10 +7202,15 @@ function setView(v) {
 // True only for a board nobody has touched yet: the seeded setup checklist, every
 // card still waiting for its first explicit run. One started card is enough to make
 // this false — we never re-decide a view for a workspace that is already in use.
+// Empty topics do not count: a fresh workspace also seeds "My to-dos" without cards,
+// and since the Cockpit ships one action it is no longer the hidden-tab fallback that
+// keeps a newcomer on the checklist — this check is.
 function hasInitialSetupMission() {
-  if (!board || board.themes.length !== 1) return false;
+  if (!board) return false;
+  const filled = board.themes.filter(t => COLS.some(c => (t.cols[c] || []).length));
+  if (filled.length !== 1) return false;
   const items = [];
-  board.themes.forEach(t => COLS.forEach(c => items.push(...(t.cols[c] || []))));
+  filled.forEach(t => COLS.forEach(c => items.push(...(t.cols[c] || []))));
   return items.length > 1 && items.every(it => threadStatus(it) === "for_gc");
 }
 

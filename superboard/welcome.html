@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Welcome to Superboard</title>
+<style>
+/* Tokens copied 1:1 from superboard/index.html :root — this page IS the board's look. */
+:root{color-scheme:dark;--bg:#08091A;--surface:#1A1B38;--ink:#EAEAF2;--muted:#8F92C4;--line:#4B4F7D;
+--accent:#6FA8FF;--accent-active:#176BFF;--accent-soft:#1C2A4A;--flag:#E4574C;--amber:#F2B23E;--amber-bright:#FFC94D;
+--board:#0F1024;--board-line:#424673;--surface-done:#14152D;--line-done:#34365C;
+--shadow-lift:color-mix(in srgb,var(--accent) 26%,var(--board));--lift-2:4px 4px 0 var(--shadow-lift);
+--mono:ui-monospace,"SF Mono",Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:1180px;margin:auto;padding:36px 28px 60px}
+.mono{font-family:var(--mono)}
+.tag{font:700 10px var(--mono);letter-spacing:2.2px;text-transform:uppercase;color:var(--muted)}
+
+/* ── Hero: the S, drawn from the same 16×16 matrix as the brand mark ── */
+.hero{display:grid;grid-template-columns:auto 1fr;gap:40px;align-items:center;margin:10px 0 44px}
+canvas#bigS{width:176px;height:176px;image-rendering:pixelated;filter:drop-shadow(8px 8px 0 var(--shadow-lift))}
+h1{margin:0 0 6px;font:800 clamp(30px,4.6vw,52px)/1.02 var(--mono);letter-spacing:.5px;text-shadow:3px 3px 0 var(--board-line)}
+h1 em{font-style:normal;color:var(--amber)}
+.lead{color:var(--muted);font-size:17px;max-width:620px;margin:0}
+.lead b{color:var(--ink)}
+
+/* ── A real board fragment, same classes/feel as the product ── */
+.board{background:var(--board);border:2px solid var(--board-line);box-shadow:var(--lift-2);margin:0 0 44px}
+.board header{display:flex;align-items:center;gap:22px;height:44px;padding:0 16px;border-bottom:2px solid var(--board-line);font:700 12px var(--mono);letter-spacing:1px}
+.board header .mark{width:16px;height:16px;image-rendering:pixelated;margin-right:-10px}
+.board header .nav{display:flex;gap:16px;color:var(--muted)}
+.board header .nav .on{color:var(--ink);border:1px solid var(--accent-active);padding:2px 8px}
+.board header .right{margin-left:auto;display:flex;gap:12px;color:var(--muted);font-weight:500}
+.grid{display:grid;grid-template-columns:150px repeat(3,1fr)}
+.grid>div{padding:12px 14px;border-bottom:1px solid var(--line-done);border-right:1px solid var(--line-done)}
+.grid .h{font:700 10px var(--mono);letter-spacing:2.2px;color:var(--muted);text-transform:uppercase}
+.grid .t{font-weight:650;font-size:12.5px;padding-top:16px}
+.grid .t small{display:block;font:400 10px var(--mono);color:var(--muted);margin-top:3px}
+.cell{display:grid;gap:8px;align-content:start;min-height:96px}
+.item{position:relative;background:var(--surface);border:2px solid var(--line);padding:9px 11px 8px;box-shadow:3px 3px 0 var(--shadow-lift);font-size:13px}
+.item .age{font:10.5px var(--mono);color:var(--muted);margin-top:3px}
+.item.marked{border-color:var(--amber);background:color-mix(in srgb,var(--amber) 9%,var(--surface))}
+.item.done{background:var(--surface-done);border-color:var(--line-done);color:var(--muted);text-decoration:line-through}
+.pill{display:inline-block;font:700 10px var(--mono);padding:1px 6px;border:1px solid var(--line);color:var(--muted);margin-left:6px;vertical-align:1px}
+.pill.wait{border-color:var(--amber);color:var(--amber)}
+.pill.q{border-color:var(--flag);color:var(--flag)}
+.callout{position:absolute;right:-6px;top:-12px;background:var(--amber);color:#08091A;font:800 10px var(--mono);padding:2px 6px;letter-spacing:.5px}
+
+/* ── The five things you actually need ── */
+.five{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:44px}
+.k{background:var(--surface);border:2px solid var(--line);box-shadow:var(--lift-2);padding:16px 15px 14px;min-height:190px;display:flex;flex-direction:column}
+.k .n{font:800 22px var(--mono);color:var(--amber);text-shadow:2px 2px 0 var(--board-line);margin-bottom:8px}
+.k h3{margin:0 0 8px;font-size:15px;line-height:1.25}
+.k p{margin:0;color:var(--muted);font-size:13px}
+.k kbd{font:700 11px var(--mono);border:1px solid var(--line);padding:1px 6px;color:var(--ink);background:var(--board);white-space:nowrap}
+.k kbd.agent{background:var(--accent-active);border-color:var(--accent-active);color:#fff}
+.k kbd.amber{border-color:var(--amber);color:var(--amber)}
+
+/* ── Close ── */
+.cta{display:flex;align-items:center;gap:18px;background:var(--surface);border:2px solid var(--amber);box-shadow:var(--lift-2);padding:18px 20px}
+.cta .btn{font:700 12px var(--mono);border:2px solid var(--line);padding:8px 14px;background:var(--board);white-space:nowrap}
+.cta .btn.done{border-color:var(--amber);color:var(--amber)}
+.cta p{margin:0;color:var(--muted)}
+.cta p b{color:var(--ink)}
+footer{margin-top:28px;font:11px var(--mono);color:var(--muted);letter-spacing:.3px}
+@media(max-width:900px){.hero{grid-template-columns:1fr;gap:20px}canvas#bigS{width:96px;height:96px}.five{grid-template-columns:1fr 1fr}.grid{min-width:760px}.board{overflow:auto}}
+@media(prefers-reduced-motion:reduce){canvas#bigS{animation:none}}
+</style>
+<main>
+
+<section class="hero">
+  <canvas id="bigS" width="16" height="16" aria-label="Superboard mark"></canvas>
+  <div>
+    <div class="tag">Welcome · read in one minute · no agent run, no tokens</div>
+    <h1><em>SUPER</em>BOARD<br>is a to-do list with a crew.</h1>
+    <p class="lead">Every card is a plain to-do. Behind every card sits <b>one standing conversation</b> with an agent that can actually do the work — when you ask, and only then.</p>
+  </div>
+</section>
+
+<section class="board" aria-label="What your board looks like">
+  <header><canvas class="mark" width="16" height="16"></canvas><span>SUPERBOARD</span>
+    <span class="nav"><span class="on">TO-DOS</span><span>COCKPIT</span></span>
+    <span class="right"><span>◐ OFF DUTY</span><span>✓ Done (3)</span></span></header>
+  <div class="grid">
+    <div class="h">Topic</div><div class="h">Now</div><div class="h">Next</div><div class="h">Backlog</div>
+    <div class="t">Getting started<small>1 / 14 done</small></div>
+    <div class="cell"><div class="item marked"><span class="callout">YOU ARE HERE</span>1 · Start here · Meet Superboard</div><div class="item">4 · Understand runs, threads and cache<div class="age">2 min</div></div></div>
+    <div class="cell"><div class="item">3 · Add your first real to-do</div></div>
+    <div class="cell"><div class="item">10 · Set up an off-duty view</div></div>
+    <div class="t">Home<small>your topics, your names</small></div>
+    <div class="cell"><div class="item">Compare the two insurance offers<span class="pill wait">⏳ Agent</span><div class="age">agent is working</div></div></div>
+    <div class="cell"><div class="item">Book the autumn trip<span class="pill q">❓</span><div class="age">wants your call</div></div></div>
+    <div class="cell"><div class="item done">Cancel old gym contract</div></div>
+    <div class="t">Writing</div>
+    <div class="cell"><div class="item">Choose the essay angle<div class="age">decision sheet attached</div></div></div>
+    <div class="cell"></div>
+    <div class="cell"><div class="item">Newsletter idea<div class="age">parked · 41 d</div></div></div>
+  </div>
+</section>
+
+<div class="tag" style="margin-bottom:12px">The five things worth knowing</div>
+<section class="five">
+  <article class="k"><div class="n">01</div><h3>A card is just a to-do.</h3><p>Write it, tick it off, drag it between <b>Now / Next / Backlog</b>. No agent is involved until you say so.</p></article>
+  <article class="k"><div class="n">02</div><h3><kbd class="agent">▶ Agent</kbd> runs one round.</h3><p>It reads the card and its thread, works, and replies as a new turn. You always see the reply's first line on the board — expand for the rest.</p></article>
+  <article class="k"><div class="n">03</div><h3>Questions come back to you.</h3><p>Facts get tested by the agent. Preferences get a <kbd class="amber">❓</kbd> pill or a decision sheet rendered right beside the thread. Nothing external happens without asking.</p></article>
+  <article class="k"><div class="n">04</div><h3><kbd>✂ New thread</kbd> when the goal changes.</h3><p>The written history stays; the next run starts fresh. Use it for a new outcome, not after every reply.</p></article>
+  <article class="k"><div class="n">05</div><h3>It's all plain text.</h3><p>The whole board lives in <span class="mono">inbox/board.md</span>. Open it, grep it, back it up. Done cards leave the view, never the file.</p></article>
+</section>
+
+<section class="cta">
+  <span class="btn done">✓ Done</span>
+  <p><b>That's the tour.</b> Close this tab, tick this card off, and open the guided walkthrough <b>Find your way around</b> from card 4 when you want the deep dive. Got a question instead? Type it into the card's thread and press <span class="mono">▶ Agent</span>.</p>
+</section>
+
+<footer>Fictional workspace · desktop layout · no personal data · rendered locally by Superboard · nothing here touches your files</footer>
+</main>
+<script>
+// Same 16×16 matrix as the product's BRAND_MARK — one source, no drift.
+const S=["................","................","................","....########....","..############..","..###......###..","..###...........","..###########...","...###########..","...........###..","...........###..","..###......###..","..############..","....########....","................","................"];
+function draw(cv,ink){const c=cv.getContext("2d");c.clearRect(0,0,16,16);c.fillStyle=ink;S.forEach((r,y)=>[...r].forEach((p,x)=>{if(p==="#")c.fillRect(x,y,1,1)}))}
+const big=document.getElementById("bigS");draw(big,"#F2B23E");draw(document.querySelector(".mark"),"#F2B23E");
+// Ambient, barely-there drift: one lit pixel of the S breathes brighter every few seconds.
+if(!matchMedia("(prefers-reduced-motion: reduce)").matches){
+  const lit=[];S.forEach((r,y)=>[...r].forEach((p,x)=>{if(p==="#")lit.push([x,y])}));
+  setInterval(()=>{draw(big,"#F2B23E");const c=big.getContext("2d");const [x,y]=lit[Math.random()*lit.length|0];c.fillStyle="#FFC94D";c.fillRect(x,y,1,1);},1800);
+}
+</script>
+</html>

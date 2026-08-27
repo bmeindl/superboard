@@ -21,9 +21,10 @@ def test_checked_in_registries_are_strictly_valid() -> None:
     rituals, ritual_errors = registries.load_rituals(HERE / "rituals.json")
     assert action_errors == []
     assert ritual_errors == []
-    # A fresh workspace learns actions and rituals during onboarding instead of
-    # inheriting somebody else's repeatable jobs.
-    assert actions == []
+    # A fresh workspace learns its actions and rituals during onboarding instead of
+    # inheriting somebody else's repeatable jobs. The single exception is keeping
+    # Superboard itself current — a job every workspace has.
+    assert [a["key"] for a in actions] == ["superboard-update"]
     assert rituals["rituale"] == {}
 
 
