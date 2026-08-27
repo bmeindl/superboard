@@ -6,7 +6,11 @@ the workspace agent can retrieve the relevant section when a question arises.
 
 ## Install and start
 
-Superboard is a zero-runtime-dependency Python package:
+Superboard is a zero-runtime-dependency Python package. The intended entry is the
+coding agent that will later do the delegated work: give Claude Code (Codex on
+macOS is experimental) the public repository URL and ask it to inspect the README,
+explain the commands, set up `~/Superboard`, start the process and open the local
+URL — the README carries that prompt verbatim. By hand, the same thing is:
 
 ```sh
 uvx superboard ~/Superboard
@@ -20,11 +24,10 @@ board from inside their directory with plain `superboard`.
 The server listens on `http://localhost:47822`. Superboard reports the workspace
 path, Git placement, and Claude Code readiness before creating anything.
 
-If Claude Code is already installed and signed in, the user can instead give it
-the public repository URL and ask it to inspect the README, explain the commands,
-set up `~/Superboard`, start the process, and open the local URL. That is an agent
-using its existing machine permissions—not a silent installer built into
-Superboard. It may still ask before installing `uv` or opening an application.
+The agent-led install is an agent using its existing machine permissions—not a
+silent installer built into Superboard. It may still ask before installing `uv` or
+opening an application. Without any agent CLI the board still runs as a plain
+local to-do board; hand-offs stay off and the first screen says why.
 
 `uvx` resolves the requested package in a disposable environment. To pick up the
 latest published release explicitly, run `uvx --refresh superboard ~/Superboard`.

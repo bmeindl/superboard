@@ -9,20 +9,28 @@ you own.
 
 ![Typing a task into the board, handing it to an agent, answering a decision sheet in a card that came back, sending the agent on, reading the result, and ticking the card off](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-loop.gif)
 
-```sh
-uvx superboard ~/Superboard
-# then open http://localhost:47822
-```
+## Install
 
-Already use Claude Code? Give it the whole setup job:
+Superboard is a board *for* delegated work, so the natural installer is the agent
+that will do that work. You need a coding-agent CLI — **Claude Code** today (Codex
+on macOS is experimental). Paste this into it:
 
 > Use <https://github.com/bmeindl/superboard> as the Superboard package I want.
 > Read its README, explain what you will run, set it up in `~/Superboard`, start
 > it, and open the local board for me. Do not clone the source into my workspace.
 
-Claude Code still uses its existing host permissions and may ask before installing
-`uv` or opening an application. The explicit terminal command above remains the
-portable fallback.
+The agent uses its existing host permissions and may ask before installing `uv`
+or opening an application. Nothing here installs silently.
+
+Prefer to run it yourself, or no agent yet? The same thing, by hand:
+
+```sh
+uvx superboard ~/Superboard
+# then open http://localhost:47822
+```
+
+No agent installed? The board still runs as a plain local to-do board; hand-offs
+stay off — and the first screen says so — until you add one.
 
 ## The one-minute version
 
