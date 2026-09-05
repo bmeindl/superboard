@@ -71,32 +71,17 @@ USAGE_LOG = _p.USAGE_LOG
 # nativen Block ab und hängen die Git-Fakten stattdessen an den PROMPT — der wird hinten
 # angefügt und kann den Prefix nicht brechen (gemessen: 792 statt 18.992 neue Tokens, trotz
 # geändertem Baum). Herleitung: inbox/analyses/2026-07-28_git-kontext-im-prompt.md
-# Cache-TTL (2026-07-30, dieses Item): Claude Code schreibt den Cache per Default mit
-# 1-Stunden-TTL — das kostet beim Schreiben 2× Basis-Input statt 1,25× bei 5 Minuten. Der
-# Aufpreis kauft Haltbarkeit ÜBER Run-Grenzen. Innerhalb eines Runs reichen 5 Minuten mit
-# Reserve — über 68 Runs lag KEIN Abstand zwischen zwei Requests über 5 min (p50 4s, p99 138s,
-# max 291s). Nicht verwechseln mit der Gesamtlaufzeit eines Runs: die liegt bei 21% der Runs
-# über 5 min, ist aber irrelevant, weil der Cache Request für Request weitergereicht wird.
-# 5m bleibt (2026-08-07, Entscheidungsblatt zu Item c074630e8b89; bestätigt am selben Tag
-# nach Neumessung). Die Begründung hat sich zweimal geändert, die Zeile nicht:
-#   - NICHT mehr gültig: "ein Folge-Run erbt ausnahmslos nur den System-Block (~17k)". 17k ist
-#     der MEDIAN. --resume erbt den Cache sehr wohl: 25 von 115 vermessenen resumten Runs (22 %)
-#     hatten cache_read > 50k im ersten Request, und genau die kamen in <10 min zurück. Der
-#     Prefix bricht nicht, die 5m-TTL läuft nur meistens vorher ab.
-#   - NICHT mehr gültig: "1h kostet netto ~34 $/Woche". Die Formel dahinter (W < 1,53*P) zählte
-#     den Prefix doppelt — P steckt zu 87 % als cache_creation des ersten Requests schon in W.
-# Richtig gerechnet liegt der Break-even bei 70 % Cache-Trefferquote. GEMESSEN wird die nicht
-# erreicht: unter 1h trafen 28 % der Folge-Runs (n=65), unter 5m 14 % (n=36) — 1h kostet damit
-# ~106k Token pro Run mehr, rund 40 $/Woche. 5m bleibt also, diesmal mit belastbarem Grund.
-# Der Bruch liegt NICHT an der TTL-Länge: auch INNERHALB der 5 min trifft nur die Hälfte
-# (5/10 Treffer, danach 0/26, Fisher p~0,0007). Warum, ist offen — die Hook-Hypothese und die
-# "langer Vorlauf-Run"-Hypothese sind beide widerlegt (§5j). Nächster Schritt wäre ein Proxy-Log
-# der ausgehenden Requests inkl. cache_control-Marker; aus den Transkripten allein geht es nicht.
-# Aus demselben Grund NICHT gebaut: TTL pro Run/Item umschaltbar (Idee 30.07.) — 1h wäre in
-# jeder Stellung die teurere. Der reale Hebel ist die Fadengröße: geerbter Kontext beim Resume
-# liegt im Median bei 143k Tokens, und jeder der ~31 internen Turns liest ihn erneut
-# (cache_read = 42,5 % der Board-Kosten).
-# Herleitung: context/2026-07_prompt-caching-mechanik.md §5j (Regime-getrennte Messung) + §5i + §5h
+# Cache TTL: the runner sets NO TTL variable at all and deliberately removes an inherited
+# FORCE_PROMPT_CACHING_5M below. On a subscription lane Claude Code picks the 1-hour bucket
+# by itself (measured: a plain `claude -p` wrote its input into `ephemeral_1h_input_tokens`,
+# nothing into the 5m bucket; sub-agents stay on 5m). Writing into the 1h bucket costs 2x
+# base input instead of 1.25x and only pays off above roughly a 70 % hit rate, so this is a
+# measurement question, not a setting: the runner journals usage anyway (USAGE_LOG), and a
+# week of real runs shows the actual resume hit rate. An API/provider lane would have to
+# measure its own before switching anything on.
+# Independent of the TTL: `--resume` under the full tool set only reuses the prefix part of
+# the time, and the bigger lever is thread size — inherited context on resume is large and
+# every internal turn reads it again.
 BASE_ENV = dict(os.environ)
 # Identity is a runner invariant, not a property of whichever shell happened to start the
 # long-lived Board server. Plain Claude always means the CLI's default account.
@@ -132,6 +117,7 @@ DEFAULT_URL = "http://127.0.0.1:47822"
 DEFAULT_TIMEOUT = 7200  # Notbremse: 120 min Gesamtlaufzeit (hochgesetzt von 60, 18.08.:
 # die Stillstandserkennung befristet seitdem auch OFFENE Werkzeuge —
 # tote Runs sterben an der Werkzeug-Frist, die Notbremse fängt nur noch fleißige Endlosschleifen)
+LONG_TIMEOUT = 21600  # bewusster Einmal-Start im Item-Menü: 6h Notbremse, nie sticky/vererbt
 IDLE_TIMEOUT = int(os.environ.get("GC_IDLE_TIMEOUT", "900"))  # 15 min OHNE ein einziges Ereignis
 # Frist für OFFENE Werkzeuge: solange ein Werkzeug läuft, schweigt der Strom komplett
 # (gemessen 2026-07-27: `sleep 100` = 110 s lang 0 Byte) — bis 08/2026 ruhte die
@@ -219,7 +205,8 @@ INLINE_MAX = _sc.INLINE_MAX  # längere/mehrzeilige Antworten wandern in einen S
 # personal/ ist seit 2026-07-14 FREI (Read+Write): "das ist unsere UI zu claude code,
 # natuerlich auf privates auch" — private Items (Zeugnis, Coaching, Personen) waren sonst
 # strukturell unbearbeitbar. Die Bremse ist jetzt eine Kontrakt-Regel im Prompt (neue
-# Dateien/Append ja, bestehende private Dateien nur auf explizite Ansage), keine Deny-Regel.
+# Dateien/Append ja, das Loeschen bestehender privater Dateien nur auf explizite Ansage),
+# keine Deny-Regel.
 # git push ist seit 2026-07-17 KEINE Deny-Regel mehr (Faden-Ansage: "ich will hier
 # git push erlauben, insbesondere wenn es aus der dev session auch explizit hervorgeht") —
 # die Bremse ist jetzt die Kontrakt-Regel im Prompt (push nur bei explizitem Faden-Go oder
@@ -518,7 +505,10 @@ def _body_write_hint(pending: dict) -> str:
         return ("\n\nTo replace this item's BODY safely, write the new body to a file and run "
                 f"`python3 {BOARD_WRITE} --id {gc_id} --body-file <path> "
                 f"--body-etag {body_etag}`. Never edit board.md for this. HTTP 409 means the "
-                "body changed after this run started: use `--show`, merge the current body, and retry.")
+                "body changed after this run started: use `--show`, merge the current body, and retry. "
+                "To move this item under another item (one level only) or back to top level, use "
+                f"`python3 {BOARD_WRITE} --id {gc_id} --parent <parent-id>` "
+                "(`--parent ''` clears it) — never splice `@gc-parent:` by hand.")
     except Exception:
         return ""
 
@@ -602,7 +592,9 @@ def _hierarchy_block(pending: dict, resume: bool) -> str:
             "topics become sub-threads. Command:\n"
             "  curl -s localhost:47822/api/gc-spawn-sub -H 'Content-Type: application/json' "
             f"-d '{{\"parent_id\":\"{(pending.get('addr') or {}).get('id', '')}\","
-            "\"title\":\"…\",\"ask\":\"<task for the sub-thread>\"}'\n"
+            "\"title\":\"…\",\"ask\":\"<task for the sub-thread>\",\"by\":\"agent\"}'\n"
+            "Keep `\"by\":\"agent\"` — it marks the brief as agent-written (sidecar header "
+            "`# Agent brief:`), so later readers never mistake your words for the owner's.\n"
             "The sub-thread is a normal board item with its own thread. There is only ONE level "
             "(sub-threads have no sub-threads). Mention in your reply what you split off.")
     return "".join(out)
@@ -705,6 +697,35 @@ def _kernel_block() -> str:
         "---\n\n")
 
 
+def _long_run_block(pending: dict) -> str:
+    """Extra execution contract for the explicit, one-shot long-run lane.
+
+    A larger hard cap is permission, not an instruction to burn six hours. The manifest
+    makes a multi-round exploration recoverable after a session/rate-limit interruption;
+    the time reserve prevents a useful run from dying before it can synthesize.
+    """
+    if pending.get("run_mode") != "long":
+        return ""
+    gc_id = (pending.get("addr") or {}).get("id", "unknown")
+    manifest = f"tmp/board-long-runs/{gc_id}/manifest.md"
+    return (
+        "\n\n## Long-run execution contract (one-shot)\n"
+        "This run has a six-hour HARD CAP; it may finish earlier. The normal idle and open-tool "
+        "watchdogs still apply, so do not leave the parent silent while background work proceeds. "
+        "Work in finite rounds and make a durable tool/checkpoint event at least every 10 minutes.\n"
+        f"At the start and end of every round, update `{manifest}` with: objective, current persona/"
+        "round, completed evidence files, unresolved risks, and the next action. On resume, read this "
+        "manifest before continuing. Keep it operational and compact; final findings belong in the "
+        "task's durable project/report location.\n"
+        "Stop exploration with at least 45 minutes or 20% of the budget remaining (whichever is "
+        "larger), validate the evidence paths, and produce the final synthesis. If a blocker or "
+        "budget pressure appears sooner, return a useful partial synthesis instead of exploring "
+        "until the safety cap.\n"
+        "This exception applies only to this accepted launch. Do not assume a follow-up, retrigger, "
+        "sub-thread, or run-all invocation receives another six-hour budget."
+    )
+
+
 def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
                  runner: str = "claude", retrieved_context: str = "") -> str:
     """Erst-Run: volle Item-Beschreibung + Faden. Resume: nur der neue Turn —
@@ -721,6 +742,7 @@ def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
     last_ask = pending.get("last_ask") or (turns[-1]["text"] if turns else "")
     last_ask = _expand_ask(last_ask, sidecar_dir)
     note = f"{pending['retrigger_note']}\n\n" if pending.get('retrigger_note') else ""
+    long_run = _long_run_block(pending)
     if resume:
         # Radar replies happen OUTSIDE the stored CLI session. A resume doesn't know about
         # them even though they're already in the board thread. Carry the radar turns since
@@ -742,7 +764,7 @@ def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
                 f"{radar_context}New turn from the owner:\n"
                 f"{last_ask}\n\n{contract}{_handoff_hint(pending.get('gc_last', ''))}"
                 f"{_body_write_hint(pending)}{_stage_hint(pending, runner)}{_hierarchy_block(pending, resume=True)}"
-                f"{_git_context(addr.get('id', ''), resume=True)}{retrieved_context}")
+                f"{_git_context(addr.get('id', ''), resume=True)}{retrieved_context}{long_run}")
     where = f"{addr.get('name', '')}" + (f" / {addr.get('col')}" if addr.get("col") else "")
     body = "\n".join(pending.get("body", []))
     last_ask_i = max((i for i, e in enumerate(turns) if e["kind"] == "ask"), default=-1)
@@ -789,7 +811,7 @@ def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
             f"{carry}Task: Handle the latest [{_cfg.OWNER}] turn.\n\n{_contract_for(runner)}"
             f"{_body_write_hint(pending)}{_stage_hint(pending, runner)}{_inbox_hint(pending)}"
             f"{_hierarchy_block(pending, resume=False)}"
-            f"{_git_context(addr.get('id', ''), resume=False)}{retrieved_context}")
+            f"{_git_context(addr.get('id', ''), resume=False)}{retrieved_context}{long_run}")
             # Kein Handoff-Hinweis im Fresh-Zweig (Fehlfeuer, gefunden 2026-07-22 im eigenen
             # Prompt dieses Items): @gc-last beschreibt die ALTE, gerade geschnittene Session.
             # Eine frische Session trägt ~0k — der Hinweis behauptete "~225k" und fragte nach
@@ -1356,7 +1378,8 @@ class RunJournal:
     beim nächsten Serverstart nach — der Neustart-Pfad war stiller Verlust (2026-07-14)."""
 
     def __init__(self, gc_id: str, title: str, base_url: str, timeout: int,
-                 model: str = "", journal_dir: Path | None = None) -> None:
+                 model: str = "", journal_dir: Path | None = None,
+                 run_mode: str = "standard") -> None:
         # None statt Default-Bindung an JOURNAL_DIR: Tests biegen gc_runner.JOURNAL_DIR auf
         # ein Temp-Dir um — ein zur def-Zeit gebundener Default würde das ignorieren, und
         # die Journal-Wache des LIVE-Servers erntete/löschte Test-Journale mitten im Lauf
@@ -1372,7 +1395,8 @@ class RunJournal:
         # und ein gewollter Abbruch landet nicht als „Absturz" im Faden.
         self.stop_path = journal_dir / f"{name}.stop"
         self.meta = {"gc_id": gc_id, "title": title, "base_url": base_url,
-                     "timeout": timeout, "model": model, "started": time.time(),
+                     "timeout": timeout, "run_mode": run_mode, "model": model,
+                     "started": time.time(),
                      "pid": None, "status": "running", "reply_text": "", "session": "",
                      "gc_last": "", "beat": {}}
         self._write()
@@ -1503,9 +1527,44 @@ def resolve_profile(profile: str) -> tuple[str, str]:
     return RUN_PROFILES.get(profile, RUN_PROFILES[""])
 
 
+def keep_awake_argv(cmd: list[str], enabled: bool) -> list[str]:
+    """Wrap exactly one long runner process in macOS `caffeinate`.
+
+    The wrapper and the CLI share the runner's process group, so Stop/timeout tears down
+    both. Other platforms (and missing system binaries) keep the original argv.
+    """
+    caffeine = Path("/usr/bin/caffeinate")
+    return [str(caffeine), "-dimsu", *cmd] if enabled and sys.platform == "darwin" and caffeine.exists() else cmd
+
+
+MAX_FINAL_STREAM_BYTES = 32_000_000
+
+
+def bounded_run_text(handle, limit: int = MAX_FINAL_STREAM_BYTES) -> str:
+    """Read a completed runner stream without scaling RAM with a multi-hour run.
+
+    Parsers need the init envelope near the head (session id) and the result near the
+    tail. Keeping both is enough; the middle is event history already available in the
+    journal while active. `dup` survives journal cleanup races and leaves the caller's
+    text-wrapper offset untouched.
+    """
+    handle.flush()
+    with os.fdopen(os.dup(handle.fileno()), "rb") as raw:
+        size = os.fstat(raw.fileno()).st_size
+        raw.seek(0)
+        if size <= limit:
+            data = raw.read()
+        else:
+            head = min(1_000_000, limit // 4)
+            data = raw.read(head)
+            raw.seek(max(head, size - (limit - head)))
+            data += b"\n" + raw.read(limit - head)
+    return data.decode("utf-8", errors="replace")
+
+
 def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, model: str = "",
                  journal: RunJournal | None = None, on_beat=None,
-                 extra_env: dict[str, str] | None = None) -> dict:
+                 extra_env: dict[str, str] | None = None, keep_awake: bool = False) -> dict:
     """Startet die headless Instanz und gibt IMMER ein Ergebnis-Dict zurück:
     {ok, reply, session_id, denials, raw_error}. Wirft nie.
     Mit journal fließt claude-stdout direkt auf Platte (Popen statt Pipe): stirbt der
@@ -1546,6 +1605,7 @@ def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mod
         cmd += ["--effort", effort]  # ~/.claude/settings.json etwas anderes steht (gemessen 27.07.)
     run_env = default_claude_env(RUN_ENV)
     run_env.update(extra_env or {})
+    cmd = keep_awake_argv(cmd, keep_awake)
     if journal is None:
         try:
             proc = subprocess.run(cmd, cwd=GC_ROOT, capture_output=True, text=True,
@@ -1597,8 +1657,7 @@ def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mod
                         state["session_id"] = sid
                 journal.mark_killed(reason, elapsed, state)
                 return _kill_outcome(reason, elapsed, state, timeout)
-            fo.seek(0), fe.seek(0)  # das Kind hat den geteilten Offset ans Ende geschoben
-            out_txt, err_txt = fo.read(), fe.read()
+            out_txt, err_txt = bounded_run_text(fo), bounded_run_text(fe)
     except FileNotFoundError:
         return {"ok": False, "reply": "", "session_id": "", "denials": [],
                 "raw_error": f"Claude binary not found ({claude_cmd})"}
@@ -2016,7 +2075,7 @@ def codex_home_ready(home: Path | None) -> bool:
 
 def spawn_codex(prompt: str, resume_id: str, codex_cmd: str, timeout: int, model: str = "",
                 journal: RunJournal | None = None, on_beat=None,
-                extra_env: dict[str, str] | None = None) -> dict:
+                extra_env: dict[str, str] | None = None, keep_awake: bool = False) -> dict:
     """Gegenstück zu spawn_claude für die Codex CLI — gleiche Signatur, gleiches
     Rückgabe-Dict, wirft nie. Prozesskontrolle (eigene Prozessgruppe, Stillstands-Wache,
     Stopp-Knopf) ist bewusst dieselbe: das ist der Teil, der teuer erarbeitet wurde."""
@@ -2040,7 +2099,8 @@ def spawn_codex(prompt: str, resume_id: str, codex_cmd: str, timeout: int, model
     except OSError as e:
         return {"ok": False, "reply": "", "session_id": "", "denials": [],
                 "raw_error": f"Cannot write prompt file: {e}"}
-    cmd = _codex_argv(codex_cmd, resume_id, model, prompt_path, last_path, own_home)
+    cmd = keep_awake_argv(
+        _codex_argv(codex_cmd, resume_id, model, prompt_path, last_path, own_home), keep_awake)
     if journal is None:
         try:
             with open(prompt_path) as fin:
@@ -2071,8 +2131,7 @@ def spawn_codex(prompt: str, resume_id: str, codex_cmd: str, timeout: int, model
                 state = dict(tail.state)
                 journal.mark_killed(reason, elapsed, state)
                 return {**_kill_outcome(reason, elapsed, state, timeout), "runner": "codex"}
-            fo.seek(0), fe.seek(0)
-            out_txt, err_txt = fo.read(), fe.read()
+            out_txt, err_txt = bounded_run_text(fo), bounded_run_text(fe)
     except FileNotFoundError:
         return {"ok": False, "runner": "codex", "reply": "", "session_id": "", "denials": [],
                 "raw_error": f"Codex binary not found ({codex_cmd})"}
@@ -2091,16 +2150,16 @@ def parse_by_runner(model: str, stdout: str, stderr: str, returncode: int | None
 
 def spawn_agent(prompt: str, resume_id: str, claude_cmd: str, timeout: int, model: str = "",
                 journal: RunJournal | None = None, on_beat=None,
-                extra_env: dict[str, str] | None = None) -> dict:
+                extra_env: dict[str, str] | None = None, keep_awake: bool = False) -> dict:
     """Einzige Weiche zwischen den Runnern. Welcher läuft, entscheidet allein das
     gewählte Profil — es gibt bewusst kein zweites Auswahlfeld neben dem Modell.
     Account routing is intentionally outside the profile picker."""
     runner = runner_of(model)
     if runner == "codex":
         return spawn_codex(prompt, resume_id, CODEX_CMD, timeout, model, journal, on_beat,
-                           extra_env)
+                           extra_env, keep_awake)
     return spawn_claude(prompt, resume_id, claude_cmd, timeout, model, journal, on_beat,
-                        extra_env)
+                        extra_env, keep_awake)
 
 
 def _write_sidecar(gc_id: str, title: str, full_text: str, sidecar_dir: Path) -> Path:
@@ -2373,7 +2432,9 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
         resume_id = ""
     if resume_id and not _resume_handle_lives(resume_id, runner_of(model)):
         resume_id = ""
-    journal = RunJournal(gc_id, title, base_url, timeout, model, journal_dir)
+    run_mode = "long" if pending.get("run_mode") == "long" else "standard"
+    journal = RunJournal(gc_id, title, base_url, timeout, model, journal_dir,
+                         run_mode=run_mode)
     if on_beat:  # Journal-Pfad sofort melden — der Stopp-Knopf braucht ihn ab Sekunde 1
         try:
             on_beat({"journal": str(journal.meta_path), "stop_path": str(journal.stop_path),
@@ -2408,7 +2469,7 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
     journal.save_prompt(prompt)  # Observability: „🔍 Prompt anzeigen" im ⋯-Menü
     agent_env = {"GC_BOARD_URL": base_url}
     out = spawn_agent(prompt, resume_id, claude_cmd, timeout, model, journal=journal,
-                      on_beat=on_beat, extra_env=agent_env)
+                      on_beat=on_beat, extra_env=agent_env, keep_awake=run_mode == "long")
     resumed = bool(resume_id)
     if not out["ok"] and not out.get("killed") and resume_id and _looks_like_dead_session(out):
         # Resume kann legitim wegbrechen (Session gelöscht/zu alt) → EIN frischer Versuch.
@@ -2420,7 +2481,8 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
                                     runner=runner_of(model), retrieved_context=retrieved_context)
         journal.save_prompt(retry_prompt)  # der Retry-Prompt ist der, der wirklich lief
         out = spawn_agent(retry_prompt, "", claude_cmd, timeout, model, journal=journal,
-                          on_beat=on_beat, extra_env=agent_env)
+                          on_beat=on_beat, extra_env=agent_env,
+                          keep_awake=run_mode == "long")
         resumed = False
         if out["ok"]:
             out["reply"] = "(new session — the old one could no longer be resumed) " + out["reply"]

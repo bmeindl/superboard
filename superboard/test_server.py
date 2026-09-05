@@ -9,6 +9,7 @@ Daten nur read-only zur Regression, alles Schreibende auf Temp-Kopien.
 from __future__ import annotations
 
 import json
+import re
 import os
 import stat
 import subprocess
@@ -293,8 +294,14 @@ def test_contract_split_byte_stable() -> None:
     # verb set — without it agents were told "never edit board.md" while holding no
     # tool that reliably exists — and `full.docs` no longer ASSERTS that the
     # workspace has README/ARCHITEKTUR (a Superboard workspace normally does not).
+    # Re-measured 2026-09-05 for the 0.3.0 port. ONE authorized change to the rendered
+    # text: `full.board_client` now names the column choices `Now|Next|Backlog`, which is
+    # what `board_write.py --col` actually accepts — the old `Jetzt|Bald|Geparkt` were the
+    # INTERNAL dict keys and would have been rejected by the client (-2 bytes). The port
+    # also adds `full.reply_style` to `_FULL_ORDER`, but the block text lives in an
+    # instance `board.contract.md`; a shipped Superboard has none, so it renders nothing.
     snapshots = {
-        "full": (5743, "b3718009cb37a79e0efa7202fe89a8ea6899a5f831a78b5200e2d0345687157d"),
+        "full": (5741, "25c8b042e72763912f09486d12df89959a2e5686dc0083db20736219ba9a88ff"),
         "reminder": (1364, "9e44a266f5808cf0b119549680078559c2b1a6e23f1acf32769451620d0c3027"),
     }
     for kind, (length, digest) in snapshots.items():
@@ -345,8 +352,8 @@ def test_contract_protocol_markers_remain_frozen() -> None:
           markers.GC_TAG == {"ask": "@gc:", "reply": "@gc-re:",
                              "done": "@gc-done:", "sys": "@gc-sys:"})
     check("markers: Sidecar-Labels bytegleich",
-          markers.REF_LABEL == {"ask": "full text", "reply": "full reply",
-                                "done": "full text"})
+          markers.REF_LABEL == {"ask": "full text", "brief": "full text",
+                                "reply": "full reply", "done": "full text"})
     for label in set(markers.REF_LABEL.values()):
         sample = f"→ {label}: inbox/gc-threads/abc-123.md"
         match = markers.REF_RE.search(sample)
@@ -428,6 +435,28 @@ def test_meta_lines_roundtrip() -> None:
           server.lost_boxes(SYNTH, sb) == 0 and server.lost_thread_events(SYNTH, sb) == 0
           and server.lost_session_lines(SYNTH, sb) == 0 and server.lost_id_lines(SYNTH, sb) == 0)
     check("synth: voller round-trip identisch", server.parse_board(server.serialize_board(sb)) == sb)
+
+
+def test_multiline_body_element_survives_serialization() -> None:
+    """Ein Body-Element MIT Zeilenumbruch (Action-Prompt aus actions.json) muss
+    zeilenweise eingerueckt rausgehen. Vorher landete alles ab Absatz 2 auf Spalte 0,
+    war unparsebar und wurde beim naechsten Save geloescht — und blockte, solange es
+    im Board lag, ueber `lost_total() > 0` jeden Schreibpfad mit HTTP 409
+    (gemessen 2026-08-26 an der Teams-Process-Action)."""
+    sb = server.parse_board(SYNTH)
+    it = [x for _s, _n, _c, x in server._all_items(sb)][0]
+    it["body"] = ["action:demo", "\u00b7\u00b7\u00b7", "Absatz eins.\n\nAbsatz zwei.\n\nAbsatz drei."]
+    text = server.serialize_board(sb)
+    check("multiline body: keine Zeile auf Spalte 0",
+          all(not re.match(r"^Absatz", ln) for ln in text.split("\n")))
+    again = server.parse_board(text)
+    it2 = [x for _s, _n, _c, x in server._all_items(again)][0]
+    check("multiline body: alle drei Absaetze erhalten",
+          [b for b in it2["body"] if b.startswith("Absatz")]
+          == ["Absatz eins.", "Absatz zwei.", "Absatz drei."])
+    check("multiline body: nichts verloren", server.lost_total(text, again) == 0)
+    check("multiline body: zweiter round-trip stabil",
+          server.parse_board(server.serialize_board(again)) == again)
 
 
 LEGACY_HEADS_SYNTH = """## Thema
@@ -1223,6 +1252,36 @@ def test_gc_body_endpoint() -> None:
         Path(tmp).unlink(missing_ok=True)
 
 
+def test_gc_body_parent() -> None:
+    """Umhängen ohne Hand-Splice — dieselbe Ein-Ebenen-Regel wie gc-spawn-sub."""
+    fd, tmp = tempfile.mkstemp(suffix=".md")
+    Path(tmp).write_text(SYNTH)
+    httpd, port = _serve(Path(tmp))
+    try:
+        code, result = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "parent": "aaaaaaaaaaaa"})
+        text = Path(tmp).read_text()
+        check("gc-body parent: Umhängen → 200 + @gc-parent-Zeile",
+              code == 200 and result.get("changed") is True
+              and "  @gc-id: bbbbbbbbbbbb\n  @gc-parent: aaaaaaaaaaaa\n" in text)
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "parent": "aaaaaaaaaaaa"})
+        check("gc-body parent: idempotent", code == 200 and Path(tmp).read_text() == text)
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "aaaaaaaaaaaa"}, "parent": "bbbbbbbbbbbb"})
+        check("gc-body parent: Sub eines Subs → 409", code == 409)
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "parent": "bbbbbbbbbbbb"})
+        check("gc-body parent: Selbstbezug → 400", code == 400)
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "parent": "zzzzzzzzzzzz"})
+        check("gc-body parent: unbekanntes Ziel → 404", code == 404)
+        check("gc-body parent: Fehler schreiben nichts", Path(tmp).read_text() == text)
+        code, result = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "parent": ""})
+        check("gc-body parent: '' löst die Kante", code == 200 and result.get("changed") is True
+              and "@gc-parent" not in Path(tmp).read_text())
+        check("gc-body parent: Datei wieder wie vorher", Path(tmp).read_text() == SYNTH)
+    finally:
+        httpd.shutdown()
+        os.close(fd)
+        Path(tmp).unlink(missing_ok=True)
+
+
 def test_gc_body_chirurgisch_bei_nichtkanonischer_datei() -> None:
     """lost=0 reicht nicht: fremde, nur umsortierbare Zeilen bleiben byteidentisch."""
     # Item B: Body steht nach @gc-id. Nichts geht verloren, aber ein Full-Serialize
@@ -1723,6 +1782,50 @@ def test_model_choice() -> None:
         Path(tmp).unlink(missing_ok=True)
 
 
+def test_long_run_policy() -> None:
+    """Long is a server-owned, one-shot launch policy—not a sticky item preference."""
+    fd, tmp = tempfile.mkstemp(suffix=".md")
+    Path(tmp).write_text(SYNTH)
+    calls = []
+    real_launch = server.launch_gc_run
+    server.launch_gc_run = lambda pending, base, cmd, timeout, **kw: (
+        calls.append((pending, timeout, kw)) or True)
+    httpd, port = _serve(Path(tmp))
+    try:
+        code, r = _post(port, "/api/gc-run",
+                        {"id": "aaaaaaaaaaaa", "model": "opus-multi", "run_mode": "long"})
+        check("long-run: 202 + serverseitige 6h-Kappe",
+              code == 202 and r.get("run_mode") == "long"
+              and r.get("timeout") == gc_runner.LONG_TIMEOUT
+              and calls[-1][1] == gc_runner.LONG_TIMEOUT
+              and calls[-1][2].get("run_mode") == "long")
+        code2, _ = _post(port, "/api/gc-run", {"id": "aaaaaaaaaaaa", "run_mode": "forever"})
+        check("long-run: unbekannter Modus abgelehnt", code2 == 400)
+        code3, _ = _post(port, "/api/gc-run", {"id": "aaaaaaaaaaaa", "timeout": 999999})
+        check("long-run: Browser darf keine freien Sekunden setzen", code3 == 400)
+        code4, _ = _post(port, "/api/gc-run-all", {"run_mode": "long"})
+        check("long-run: run-all kann keine 6h-Welle starten", code4 == 400)
+    finally:
+        httpd.shutdown()
+        server.launch_gc_run = real_launch
+        Path(tmp).unlink(missing_ok=True)
+
+    p = {"run_mode": "long", "addr": {"id": "abcdef123456"}}
+    block = gc_runner._long_run_block(p)
+    check("long-run: Prompt verlangt Checkpoints + Synthese-Reserve",
+          "manifest.md" in block and "45 minutes" in block and "watchdogs" in block)
+    check("long-run: Standardprompt bleibt unverändert", gc_runner._long_run_block({}) == "")
+    wrapped = gc_runner.keep_awake_argv(["agent", "--go"], True)
+    expected = sys.platform == "darwin" and Path("/usr/bin/caffeinate").exists()
+    check("long-run: macOS hält nur den gewählten Kindprozess wach",
+          (wrapped[0] == "/usr/bin/caffeinate") == expected)
+    with tempfile.TemporaryFile(mode="w+") as stream:
+        stream.write("INIT\n" + "x" * 200 + "\nRESULT")
+        clipped = gc_runner.bounded_run_text(stream, limit=40)
+    check("long-run: dicker Ergebnisstrom behält Kopf + Ende begrenzt",
+          clipped.startswith("INIT") and clipped.endswith("RESULT") and len(clipped) <= 41)
+
+
 def test_sweep_respects_open_threads() -> None:
     """sweep.py: lost_total-Guard + Personen-Items mit offenem Faden bleiben."""
     import sweep
@@ -1732,6 +1835,31 @@ def test_sweep_respects_open_threads() -> None:
     items = b["persons"][0]["items"]
     check("sweep: open_thread erkennt offenen Personen-Faden", sweep.open_thread(items[0]))
     check("sweep: done ohne Faden ist sweepbar", not sweep.open_thread(items[1]))
+
+
+def test_sweep_stamps_missing_done_at() -> None:
+    """Retentions-Deadlock (Board-Maintenance 04.09.): ein abgehaktes Item ohne
+    @done-at UND ohne *(Datum)* liefert done_at() == None, ripe() bleibt fuer immer
+    False — die Karte stand seit Ende Juli abgehakt in „Team & Org / Jetzt". Der Sweep
+    stempelt jetzt @done-at=jetzt; nichts verschwindet sofort, die 25h-Frist beginnt."""
+    import sweep
+    txt = ("## T\n\n### Jetzt\n\n"
+           "- [x] Ohne jeden Stempel\n\n"
+           "- [x] Nur mit Datum *(2020-01-01)*\n\n"
+           "- [ ] Offen ohne Stempel\n\n"
+           "### Bald\n\n### Geparkt\n\n# Personen\n\n# Notizen\n")
+    b = sweep.parse_board(txt)
+    items = b["themes"][0]["cols"]["Jetzt"]
+    check("done-at-Deadlock: ohne beide Zeitquellen ist done_at() None",
+          sweep.done_at(items[0]) is None)
+    dated = sweep.stamp_missing_done_at(b)
+    check("done-at-Deadlock: genau das stempellose Item wird gestempelt",
+          len(dated) == 1 and bool(items[0]["done_at"])
+          and not items[1].get("done_at") and not items[2].get("done_at"))
+    check("done-at-Deadlock: nach dem Stempel ist die Karte ueberhaupt datierbar",
+          sweep.done_at(items[0]) is not None)
+    check("done-at-Deadlock: frisch gestempelt heisst noch NICHT reif (25h-Schonfrist)",
+          "Ohne jeden Stempel" in sweep.serialize_board(b))
 
 
 def test_sweep_closes_done_threads() -> None:
@@ -1806,8 +1934,13 @@ def test_sweep_retires_chat_cards() -> None:
     retired = sweep.retire_chat_cards(b)
     check("chat-gc: nur die ruhende Karte wird abgehakt",
           len(retired) == 1 and cock[0]["done"] and not cock[1]["done"])
-    check("chat-gc: done_at traegt den Ruhe-Zeitpunkt, nicht jetzt",
-          cock[0]["done_at"].startswith(stale[:10]))
+    # done_at ist UTC (wie überall im Board), `stale` ist Ortszeit — zwischen 09:00 und
+    # 11:00 MESZ liegt now−9h auf einem anderen UTC-Datum. Also erst konvertieren.
+    from datetime import timezone as _tz
+    stale_utc_day = (datetime.strptime(stale, "%Y-%m-%d %H:%M")
+                     .astimezone(_tz.utc).strftime("%Y-%m-%d"))
+    check("chat-gc: done_at trägt den Ruhe-Zeitpunkt, nicht jetzt",
+          cock[0]["done_at"].startswith(stale_utc_day))
     with tempfile.TemporaryDirectory() as td:
         board_f = Path(td) / "board.md"
         board_f.write_text(txt)
@@ -2221,12 +2354,13 @@ def test_timeout_default() -> None:
     primär bei Stillstand — und seit 18.08. auch bei einem hängenden Werkzeug.
     Alle Zahlen hier festnageln — sie sind eine Entscheidung, kein Zufall."""
     check("timeout: Notbremse 120 min", gc_runner.DEFAULT_TIMEOUT == 7200)
+    check("timeout: Long-Run-Notbremse 6 h", gc_runner.LONG_TIMEOUT == 21600)
     check("timeout: Stillstand 15 min", gc_runner.IDLE_TIMEOUT == 900)
     check("timeout: Werkzeug-Frist 15 min", gc_runner.BUSY_TIMEOUT == 900)
     check("timeout: Sub-Agenten-Frist 45 min", gc_runner.BUSY_TIMEOUT_AGENT == 2700)
     check("timeout: Fristen steigen von Stillstand bis Notbremse",
           gc_runner.IDLE_TIMEOUT <= gc_runner.BUSY_TIMEOUT
-          < gc_runner.BUSY_TIMEOUT_AGENT < gc_runner.DEFAULT_TIMEOUT)
+          < gc_runner.BUSY_TIMEOUT_AGENT < gc_runner.DEFAULT_TIMEOUT < gc_runner.LONG_TIMEOUT)
 
 
 def test_stream_parser_beide_formate() -> None:
@@ -5140,6 +5274,29 @@ def test_hierarchy_spawn_endpoint() -> None:
         check("spawn: unbekannte Eltern-ID → 404", code3 == 404)
         code4, _ = _post(port, "/api/gc-spawn-sub", {"parent_id": "p00000000000", "title": "  "})
         check("spawn: leerer Titel → 400", code4 == 400)
+        # Autor-Kopf (System Review 02.09., Faden bab941e50135): Agenten-Briefs bekommen
+        # `# Agent brief:`, das Feld des Owners weiterhin `# <Owner> turn:` — derselbe Endpoint.
+        import sidecar
+        long_ask = "Build brief: " + ("x" * 600)
+        sc_dir = Path(tmp).parent / "gc-threads"
+        code5, r5 = _post(port, "/api/gc-spawn-sub",
+                          {"parent_id": "p00000000000", "title": "Sub agent", "ask": long_ask, "by": "agent"})
+        code6, r6 = _post(port, "/api/gc-spawn-sub",
+                          {"parent_id": "p00000000000", "title": "Sub human", "ask": long_ask})
+        heads = {}
+        for rid in (r5.get("id"), r6.get("id")):
+            for f in sc_dir.glob(f"{rid}-*.md"):
+                heads[rid] = f.read_text().split("\n", 1)[0]; f.unlink()
+        check("spawn: by=agent → Sidecar-Kopf 'Agent brief'",
+              code5 == 200 and heads.get(r5.get("id"), "").startswith("# Agent brief:"))
+        check("spawn: ohne by → Sidecar-Kopf '<Owner> turn'",
+              code6 == 200 and heads.get(r6.get("id"), "")
+              .startswith(f"# {sidecar.HEADER_LABEL['ask']}:"))
+        col2 = server.parse_board(Path(tmp).read_text())["themes"][0]["cols"]["Jetzt"]
+        check("spawn: by=agent → Faden-Turn bleibt kind=ask mit Verweis 'voller Text'",
+              any(x["title"] == "Sub agent" and x["thread"][0]["kind"] == "ask"
+                  and "full text: " in x["thread"][0]["text"]   # Sidecar-Dir liegt im Test außerhalb des Repos
+                  and "gc-threads/" in x["thread"][0]["text"] for x in col2))
     finally:
         httpd.shutdown(); os.close(fd); os.unlink(tmp)
 
@@ -5418,6 +5575,39 @@ def test_blatt_am_faden_nur_letzter_turn() -> None:
             check("blatt: Traversal-Pfad liefert nichts", server.item_sheet(traversal) == "")
 
             check("blatt: Item ohne Faden liefert nichts", server.item_sheet({}) == "")
+
+            # A demo (click-through) renders in the same split pane but asks NOTHING —
+            # the card must not flip to "waiting on the owner" because of it.
+            (root / "docs" / "demos").mkdir(parents=True)
+            demo = "docs/demos/radar.html"
+            (root / demo).write_text("<html></html>")
+            mit_demo = {"thread": [{"kind": "reply", "text": f"Built and tested: {demo}"}]}
+            check("demo: wird als Blatt-Pfad gefunden (gleiche Andockstelle)",
+                  server.item_sheet(mit_demo) == demo)
+            check("demo: gilt als demo, nicht als sheet",
+                  server.sheet_kind(demo) == "demo" and server.sheet_kind(blatt) == "sheet")
+            check("demo: setzt die Karte NICHT auf needs_input",
+                  server.item_needs_input(mit_demo) == "")
+
+            # One turn may name a click-through, a standalone visual report and a
+            # publishing payload. The reader should get the report — not whichever
+            # .html happened to come last, and never a raw markup fragment.
+            project = root / "projects" / "review"
+            project.mkdir(parents=True)
+            overview = "projects/review/overview.html"
+            storage = "projects/review/publish-payload.html"
+            (root / overview).write_text("<!doctype html><html><body>Portfolio</body></html>")
+            (root / storage).write_text("<ac:structured-macro><ri:page /></ac:structured-macro>")
+            mixed = {"thread": [{"kind": "reply", "text":
+                f"Demo: {demo}\nOverview: {overview}\nPublish payload: {storage}"}]}
+            check("artifact: visueller Report gewinnt vor Demo und Publish-Payload",
+                  server.item_sheet(mixed) == overview)
+            check("artifact: eigener Typ und kein needs_input",
+                  server.sheet_kind(overview) == "artifact"
+                  and server.item_needs_input(mixed) == "")
+            payload_only = {"thread": [{"kind": "reply", "text": f"Payload: {storage}"}]}
+            check("artifact: Publish-Payload wird nie automatisch angedockt",
+                  server.item_sheet(payload_only) == "")
         finally:
             server.GC_ROOT, server.sidecar.SIDECAR_DIR = orig_root, orig_dir
 
@@ -5611,7 +5801,10 @@ def main() -> int:
                test_runner_spawn_envelopes, test_runner_inline_and_sidecar,
                test_gc_run_endpoint, test_gc_run_failure_visible,
                test_sol_final_fixes, test_gc_run_all_and_sidecar_route,
-               test_model_choice, test_sweep_respects_open_threads, test_sweep_closes_done_threads,
+               test_model_choice, test_long_run_policy,
+               test_sweep_respects_open_threads, test_sweep_closes_done_threads,
+               test_sweep_stamps_missing_done_at,
+               test_sweep_retires_chat_cards,
                test_sweep_unknown_thread_kind, test_sweep_heartbeat,
                test_sweep_sidecar_archive, test_sweep_sidecar_collision_warns,
                test_sweep_sidecar_dry_run, test_sweep_sidecar_order_safety,

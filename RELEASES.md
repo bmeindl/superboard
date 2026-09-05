@@ -7,6 +7,26 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
 — that number counts every change by size and is not a stability promise.
 `CHANGELOG.md` inside the package is that internal build history.
 
+## [0.3.0] — 2026-09-05 · the write edge, documented — and the board stand of September 4
+
+- README now says in its first lines who Superboard is for (people already running
+  several agents, review load as the bottleneck) and who it is not for, shows what
+  `inbox/board.md` actually looks like, and documents the **write edge**: any script,
+  cron job, CI step or other agent can post into a card through
+  `.superboard/board_write.py` or `POST /api/gc-append`. You do not have to switch
+  your workflow to use the board as the thread that outlives the terminal.
+- `board_write.py --col` speaks English: `Now`, `Next`, `Backlog`.
+- **▶ Start long run · up to 6h** in the card menu: a one-shot exception for a run
+  that needs hours, visibly marked on card, overlay and CREW, never a sticky toggle.
+- Re-parent a card under another (one level) from the client: `--parent <gc-id>`.
+- Smaller: repo HTML can reference screenshots relatively (`/repo-file/`), the md
+  viewer renders `_emphasis_`, wrapped spans and YAML front matter, the hover toolbar
+  of top-row cards no longer flips into the header, done items without any timestamp
+  archive again, board-lint reports content-identical duplicate cards.
+- Not in this release, on purpose: the reply-suggestion experiment the origin board
+  gained on the same evening. It ships when its owner has used it. Build 6.23.0
+  (origin stand 2026-09-04, origin Build 6.21.0).
+
 ## [0.2.0] — 2026-08-27 · guided first run and a self-updating Cockpit
 
 - Three onboarding pages in the board's own look, served from the package: a

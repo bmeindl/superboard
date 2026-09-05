@@ -142,6 +142,31 @@ Actions and rituals are re-read after a page reload. Changes to
 Stop the process with `Ctrl+C` and run the same start command again; `inbox/`
 holds the durable state, so a restart loses no board work.
 
+## Writing into the board from outside
+
+Superboard has one writer: the running server. Nothing else edits `inbox/board.md`
+— not you, not an agent, not a script. Everything that wants to write goes through
+the server, which is what makes a card safe to post into from several places at
+once. The two doors:
+
+- `.superboard/board_write.py` — the client the server copies into every workspace.
+  Pure standard library, runs with any `python3`, no install. `--help` lists the
+  whole sanctioned surface: `--show` (body + revision), `--body-file` +
+  `--body-etag` (replace a body, optimistic locking), `--stage` (process stage),
+  `--new-card` / `--ensure-card` (create a to-do; never starts a run), `--new-topic`,
+  `--docs`. Column names are `Now`, `Next`, `Backlog`. The client talks to
+  `http://127.0.0.1:47822`; a board on another port takes `--url` or `GC_BOARD_URL`.
+- `POST /api/gc-append` — the endpoint the runner itself uses to report back.
+  JSON body `{"kind": "ask|reply|done|sys", "text": "…", "addr": {"id": "<gc-id>"}}`.
+  `ask` is an owner turn addressed to the agent, `reply` an agent turn addressed to
+  you, `done` closes the thread, `sys` is context that answers nothing. The
+  `@gc-id` is the 12-hex tag on the card (visible in the file and in the card's
+  overlay). The server answers 409 if the card is not uniquely found.
+
+Typical uses: a cron job posting a nightly result into the card that owns it, a CI
+step reporting a deploy, or a different agent handing something over to the board
+instead of to a chat window. The file stays the review surface either way.
+
 ## Agent access and handoffs
 
 The selected CLI runs in auto mode and inherits its host access plus configured
