@@ -86,8 +86,9 @@ def _summary(result: dict, limit: int = 4) -> list[str]:
     """
     themes = result.get("dup_themes", [])
     ids = result.get("dup_ids", [])
+    bodies = result.get("dup_bodies", [])
     out = [f"⚠ STRUKTUR — {len(themes)} doppelte Überschrift(en), "
-           f"{len(ids)} doppelte @gc-id(s)", ""]
+           f"{len(ids)} doppelte @gc-id(s), {len(bodies)} inhaltsgleiche Item-Gruppe(n)", ""]
     for d in themes[:limit]:
         out.append(f"  Überschrift \"## {d['name']}\" steht {d['count']}× "
                    f"(Zeile {', '.join(str(x) for x in d['lines'])})")
@@ -95,7 +96,11 @@ def _summary(result: dict, limit: int = 4) -> list[str]:
         loc = ", ".join(str(x) for x in d["lines"]) or "?"
         out.append(f"  @gc-id {d['id']} an {d['count']} Items (Zeile {loc}) — "
                    f"{(d['titles'] or [''])[0][:50]}")
-    rest = max(0, len(themes) - limit) + max(0, len(ids) - limit)
+    for d in bodies[:limit]:
+        out.append(f"  Item \"{d['title'][:50]}\" {d['count']}× unter verschiedenen IDs "
+                   f"({', '.join(d['ids'][:3])}{', …' if len(d['ids']) > 3 else ''})")
+    rest = (max(0, len(themes) - limit) + max(0, len(ids) - limit)
+            + max(0, len(bodies) - limit))
     if rest:
         out.append(f"  … und {rest} weitere.")
     return out + [""]
@@ -144,7 +149,7 @@ def check() -> int:
     from board_lint import lint
 
     result = lint(BOARD.read_text())
-    if not (result["dup_ids"] or result["dup_themes"]):
+    if not (result["dup_ids"] or result["dup_themes"] or result.get("dup_bodies")):
         _write_stamp(stamp, mtime, 0)
         return 0
 

@@ -6,6 +6,19 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.23.0] — 2026-09-05
+- feat(port): origin board stand of 2026-09-04 (origin Build 6.21.0) + English write edge
+  - Ports the origin board from origin Build 6.19.15 to 6.21.0 (2026-08-26 → 2026-09-04
+    afternoon): one-shot long-run launch (`▶ Start long run · up to 6h`), re-parenting
+    items via `board_write.py --parent`, `/repo-file/` serving images, md viewer fixes (underscore emphasis, wrapped
+    spans, front matter), top-row hover toolbar flip, sweep making undated done items
+    archivable again, board-lint `dup_bodies`, retro-scan dating fixes.
+  - Deliberately NOT included: the reply-suggestion experiment (origin Build 6.22.0,
+    same evening) and `wall_ms` run logging (6.22.1) — untested by the owner; the port
+    stops at the 04.09. afternoon commit, so no suggestion code exists in this tree.
+  - `board_write.py --col` now takes the English column names `Now|Next|Backlog`
+    (legacy internal keys still accepted); contract and skill texts follow.
+
 ## [6.22.0] — 2026-08-27
 - feat(onboarding): board-look pages and a shipped update card
   - The introduction, the walkthrough and a new inspiration page are rebuilt in the

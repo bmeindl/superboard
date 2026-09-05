@@ -369,6 +369,27 @@ def fmt_item(it: dict, origin: str) -> str:
     return "\n".join(lines)
 
 
+def stamp_missing_done_at(board: dict, now: datetime | None = None) -> list[str]:
+    """Retentions-Deadlock (Board-Maintenance 04.09.): ein abgehaktes Item OHNE
+    `@done-at` UND ohne `*(Datum)*` liefert in done_at() None — ripe() ist damit
+    dauerhaft False und die Karte bleibt fuer immer abgehakt in einer aktiven Spalte
+    stehen (gefunden: die vierkoepfige Familie „Growth strategy", Team & Org / Jetzt,
+    seit Ende Juli). Der Sweep stempelt hier `@done-at` auf JETZT: nichts verschwindet
+    sofort, die normale 25h-Schonfrist beginnt einfach zu laufen. Nur der Fall ohne
+    beide Zeitquellen — ein vorhandenes `date` bleibt der grosszuegige Fallback.
+    → Liste „Ort: Titel" fuers Log."""
+    ts = (now or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z")
+    stamped: list[str] = []
+    spots = [(f"{t['name']} / {c}", it)
+             for t in board["themes"] for c in theme_cols(t) for it in t["cols"][c]]
+    spots += [(f"Person: {p['name']}", it) for p in board["persons"] for it in p["items"]]
+    for origin, it in spots:
+        if it["done"] and not it.get("done_at") and not it.get("date"):
+            it["done_at"] = ts
+            stamped.append(f"{origin}: {it['title']}")
+    return stamped
+
+
 def done_at(it: dict) -> datetime | None:
     """Effektiver Abhak-Zeitpunkt für die Stunden-Retention: @done-at (UTC-ISO) wenn
     vorhanden, sonst Tagesende (23:59:59 UTC) des `date`-Felds als großzügiger Fallback
@@ -473,6 +494,10 @@ def _run(dry_run: bool) -> int:
     # schließen, damit open_thread() sie unten nicht mehr vor dem Archiv schützt.
     closed = close_done_threads(board)
 
+    # Ohne @done-at UND ohne date bleibt ripe() fuer immer False — Stempel nachziehen,
+    # damit die Schonfrist ueberhaupt anfaengt zu laufen (statt Dauerbestand im Board).
+    dated = stamp_missing_done_at(board)
+
     now_utc = datetime.now(timezone.utc)
     cutoff = now_utc - timedelta(hours=RETENTION_HOURS)
     # Chat-Karten haben eine eigene, viel kuerzere Frist: die 25h-Schonfrist existiert fuer
@@ -575,6 +600,10 @@ def _run(dry_run: bool) -> int:
             print("\n".join(f"- {d}" for d in overdue))
         if stamped:
             print(f"sweep (dry-run): würde {stamped} undatierte Wait(s) mit heute stempeln")
+        if dated:
+            print(f"sweep (dry-run): würde {len(dated)} abgehakte(n) Item(s) ohne jeden "
+                  "Zeitstempel mit @done-at=jetzt versehen (sonst nie archivierbar):")
+            print("\n".join(f"- {d}" for d in dated))
         if sidecar_warnings:
             print(f"sweep (dry-run): {len(sidecar_warnings)} Sidecar-Warnung(en):")
             print("\n".join(f"- {w}" for w in sidecar_warnings))
@@ -598,7 +627,8 @@ def _run(dry_run: bool) -> int:
     print(f"sweep: {len(swept)} Item(s) → {ARCHIVE.name}"
           + (f" · {len(overdue)} Wait(s) überfällig — nachfassen" if overdue else "")
           + (f" · {len(closed)} Faden abgehakter Items geschlossen" if closed else "")
-          + (f" · {len(retired)} Cockpit-Chat-Karte(n) stillgelegt" if retired else ""))
+          + (f" · {len(retired)} Cockpit-Chat-Karte(n) stillgelegt" if retired else "")
+          + (f" · {len(dated)} Item(s) ohne Zeitstempel mit @done-at nachgestempelt" if dated else ""))
     if sidecar_warnings:
         print(f"sweep: {len(sidecar_warnings)} Sidecar-Warnung(en):")
         print("\n".join(f"- {w}" for w in sidecar_warnings))

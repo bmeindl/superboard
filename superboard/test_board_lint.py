@@ -238,3 +238,37 @@ def test_exit_code_meldet_auch_struktur_doppel(tmp_path, capsys):
         assert "OK —" in out, "unsperrt: der OK-Kopf muss trotzdem stehen"
     finally:
         sys.argv = argv
+
+
+# --- Inhaltsgleiche Items unter verschiedenen IDs (30.08.) ----------------------
+# Dritter Befundtyp: vier Items lagen je 7x im Board, byte-identisch, aber jede Kopie
+# mit frischer @gc-id. dup_ids sah nichts (IDs eindeutig), der Round-Trip sah nichts
+# (jede Kopie gültig). Schlüssel ist Titel+Body, nicht die ID.
+
+GEKLONTES_ITEM = CLEAN.replace(
+    "- [ ] Zweites Item *(2026-07-28)*\n  @gc-id: ddddeeeeffff\n",
+    "- [ ] Zweites Item *(2026-07-28)*\n  @gc-id: ddddeeeeffff\n\n"
+    "- [ ] Zweites Item *(2026-07-28)*\n  @gc-id: 111122223333\n\n"
+    "- [ ] Zweites Item *(2026-07-28)*\n  @gc-id: 444455556666\n")
+
+
+def test_sauberes_board_hat_keine_inhaltsgleichen_items():
+    assert _lint(CLEAN)["dup_bodies"] == []
+
+
+def test_gleicher_body_unter_neuen_ids_wird_gefunden_sperrt_aber_nicht():
+    r = _lint(GEKLONTES_ITEM)
+    assert r["locked"] is False
+    assert r["dup_ids"] == [], "IDs sind eindeutig — das ist kein dup_ids-Fall"
+    assert len(r["dup_bodies"]) == 1
+    d = r["dup_bodies"][0]
+    assert d["count"] == 3
+    assert d["ids"] == ["111122223333", "444455556666", "ddddeeeeffff"]
+    assert "Zweites Item" in d["title"]
+
+
+def test_doppelte_gc_id_ist_kein_dup_bodies_fall():
+    """Gleiche ID zweimal meldet dup_ids — dup_bodies soll das nicht doppelt melden."""
+    r = _lint(DOPPELTES_ITEM)
+    assert r["dup_bodies"] == []
+    assert len(r["dup_ids"]) == 1

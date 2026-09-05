@@ -89,3 +89,12 @@ README claim nobody verified this round.
   required `macOS / Python` pull_request checks; a follow-up commit on the branch
   (this line) triggers them. Version bump and RELEASES.md were edited by hand when
   the port script could not run — same result, check `pyproject.toml` twice.
+- 2026-09-05 · 0.3.0: the public `Build` number has its own series since 0.1.0 (the
+  public CHANGELOG carries 6.21.x/6.22.0 entries that never existed in the origin), so
+  `sync-version` and `port_to_superboard.py release` cannot be used — the release gate
+  in `release` demands origin build == public build. Bump the public build in its own
+  series (here 6.23.0), name the origin stand in the entry, and edit `pyproject.toml`
+  and `RELEASES.md` by hand. Also: a release may deliberately port an OLDER origin
+  commit than HEAD (here 04.09. instead of 05.09.) to leave out an untested feature —
+  `git archive <commit>` + `git merge-file` against the ledger's base commit does this
+  cleanly; the ledger then records the ported commit's hashes, not HEAD's.

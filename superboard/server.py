@@ -48,7 +48,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.22.0"
+VERSION = "6.23.0"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -171,7 +171,14 @@ def _all_cols(board: dict):
 # above 2 MB and paths outside the workspace are blocked below as well.
 BLOCKED_TOP_DIRS: set[str] = {"personal", "private"}
 READABLE_SUFFIXES = {".md", ".txt", ".py", ".ts", ".js", ".html", ".css",
-                     ".json", ".yaml", ".yml", ".sh", ".csv", ".sql", ".toml"}
+                     ".json", ".yaml", ".yml", ".sh", ".csv", ".sql", ".toml",
+                     # Bilder: damit ein Repo-HTML (Evidence-Seite, Review) seine Screenshots
+                     # relativ referenzieren kann statt sie zu base64-embedden — sonst reißt
+                     # jede Seite mit ein paar Dutzend Screenshots das 2-MB-Limit (2026-09-03).
+                     # Kein .svg: das ist Skript-fähig und braucht keinen zweiten HTML-Weg.
+                     ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+IMAGE_CTYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".gif": "image/gif", ".webp": "image/webp"}
 WRITE_LOCK = threading.Lock()
 
 
@@ -604,7 +611,16 @@ def item_lines(it: dict) -> list[str]:
     title = f"**{it['title']}**" if it.get("mark") else it["title"]
     out.append(f"- [{mark}] {title}{due}{date}")
     for b in it.get("body", []):
-        out.append(f"  {b}")
+        # Mehrzeilige Body-Elemente zeilenweise einruecken. Ein Element mit "\n"
+        # (Quelle: Action-Prompts aus actions.json, run_cockpit_action) schrieb sonst
+        # nur die ERSTE Zeile eingerueckt — die Folgeabsaetze landeten auf Spalte 0,
+        # waren beim naechsten parse_board unlesbar und verschwanden beim naechsten
+        # Save. Gemessen 2026-08-26: die HARD-BOUNDARIES-Absaetze der Teams-Process-
+        # Action gingen so verloren, und solange sie im Board lagen, blockte
+        # `lost_total() > 0` jeden Schreibpfad mit HTTP 409.
+        for line in str(b).split("\n"):
+            if line.strip():
+                out.append(f"  {line}")
     for sev in it.get("stages", []):
         out.append(f"  @stage: {sev.get('text', '')}".rstrip())
     if it.get("id"):
@@ -713,9 +729,30 @@ def item_body_etag(body: list[str]) -> str:
 SHEET_RE = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+\.html)(?![\w])")
 
 
+def _is_publish_payload(path: Path) -> bool:
+    """True fuer HTML-Fragmente, die fuer ein Zielsystem statt fuer Menschen gebaut sind.
+
+    Confluence-Storage ist absichtlich kein vollstaendiges HTML-Dokument: im Browser sieht
+    man rohe ``ac:``-/``ri:``-Tags. Solche Payloads bleiben als normaler Dateilink erreichbar,
+    duerfen aber nie die visuelle Beilage im Faden verdraengen.
+    """
+    try:
+        sample = path.read_text(errors="ignore")[:8192].lstrip().lower()
+    except OSError:
+        return False
+    return not sample.startswith(("<!doctype html", "<html")) and (
+        "<ac:" in sample or "<ri:" in sample
+    )
+
+
 def item_sheet(item: dict) -> str:
-    """Repo-relativer Pfad des Entscheidungsblatts am letzten Turn — oder "".
-    Nur was /repo-file/ auch ausliefern würde (kein Dot-Segment, existiert, unter GC_ROOT)."""
+    """Primaere HTML-Beilage am letzten Turn — oder "".
+
+    Nur was /repo-file/ ausliefern würde (kein Dot-Segment, existiert, unter GC_ROOT).
+    Gibt es mehrere HTMLs, gilt die Leserabsicht statt zufaelliger Textreihenfolge:
+    Entscheidungsblatt > eigenstaendiges Artefakt > Demo. Publish-Payloads wie
+    Confluence-Storage werden nie automatisch angedockt.
+    """
     turns = [ev for ev in item.get("thread", []) if ev.get("kind") in ("ask", "reply")]
     if not turns:
         return ""
@@ -726,28 +763,37 @@ def item_sheet(item: dict) -> str:
     # verlinktes Blatt war so unsichtbar (Regression 14.08., zweimal am selben Tag);
     # der Einzelpatch damals fixte nur den Link, nicht die Ursache.
     text = text.replace(f"{GC_ROOT}/", "")
-    for rel in reversed(SHEET_RE.findall(text)):
+    candidates: list[tuple[int, int, str]] = []
+    for index, rel in enumerate(SHEET_RE.findall(text)):
         parts = rel.split("/")
         if any(p in ("", ".", "..") or p.startswith(".") for p in parts):
             continue
         p = (GC_ROOT / rel).resolve()
         if p.is_relative_to(GC_ROOT) and p.is_file():
-            return rel
-    return ""
+            if _is_publish_payload(p):
+                continue
+            kind = sheet_kind(rel)
+            rank = {"sheet": 3, "artifact": 2, "demo": 1}.get(kind, 0)
+            candidates.append((rank, index, rel))
+    return max(candidates, default=(0, 0, ""))[2]
 
 
 def sheet_kind(rel: str) -> str:
-    """"sheet" (decision sheet) or "demo" (click-through) — or "" without a file.
+    """"sheet" (decision sheet), "artifact" or "demo" (click-through) — or "" without a file.
 
     A finished feature can grow more than a sheet: a click-through demo (same
-    mechanism, different purpose) can sit alongside it. A demo asks NOTHING, so it
-    must not put the card into "waiting on the owner" or show "Decision sheet" in
-    the split pane. Detected by path, not content: `demos/` in the path or a name
-    ending in `-demo.html`."""
+    mechanism, different purpose) can sit alongside it, and a project folder can hold a
+    standalone visual report. A demo or an artifact asks NOTHING, so neither must put the
+    card into "waiting on the owner" or show "Decision sheet" in the split pane. Only a
+    temp-scoped HTML is a decision sheet; a persistent project HTML is an artifact.
+    Demos are detected by path, not content: `demos/` in the path or a name ending in
+    `-demo.html`."""
     if not rel:
         return ""
     parts = rel.split("/")
-    return "demo" if "demos" in parts[:-1] or parts[-1].endswith("-demo.html") else "sheet"
+    if "demos" in parts[:-1] or parts[-1].endswith("-demo.html"):
+        return "demo"
+    return "sheet" if parts[0] == "tmp" else "artifact"
 
 
 def item_needs_input(item: dict) -> str:
@@ -2009,7 +2055,7 @@ def restart_draining() -> bool:
 
 def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
                   semaphore: threading.Semaphore | None = None, model: str = "",
-                  sidecar_dir: Path | None = None) -> bool:
+                  sidecar_dir: Path | None = None, run_mode: str = "standard") -> bool:
     """Registriert das Item in RUNNING und startet den Agenten-Run als Daemon-Thread.
     False = lief schon ODER ein Neustart drainet gerade. Gemeinsamer Pfad für Einzel-Run
     und Run-all; das optionale Semaphor (Run-all-Parallellimit) wird IMMER released —
@@ -2027,7 +2073,13 @@ def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
             return False
         RUNNING[gc_id] = time.time()
         BEATS[gc_id] = {"steps": 0, "last_tool": "", "session_id": "", "rate_limit": "",
-                        "last_event": time.time(), "stop_path": ""}
+                        "last_event": time.time(), "stop_path": "",
+                        "runner": gc_runner.runner_of(model), "run_mode": run_mode,
+                        "cap_seconds": timeout}
+
+    # The policy travels with the run snapshot and into its durable journal/prompt. It is
+    # deliberately not written to board.md: long mode is a consumed launch action, not item state.
+    pending = {**pending, "run_mode": run_mode}
 
     # Der Server darf gegen ein per --file umgelenktes Board laufen (Tests, Wegwerf-
     # Instanzen, spaeter das OSS-Package). Antworten muessen dann neben DIESEM Board
@@ -2063,7 +2115,7 @@ def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
             if semaphore:
                 semaphore.release()
             try:
-                _maybe_retrigger(pending, base_url, claude_cmd, timeout, model, sidecar_dir)
+                _maybe_retrigger(pending, base_url, claude_cmd, model, sidecar_dir)
             except Exception as e:  # noqa: BLE001 — Retrigger-Fehler darf den Run nicht mitreißen
                 print(f"todo-board: Auto-Retrigger für {gc_id} fehlgeschlagen: {e}")
 
@@ -2071,7 +2123,7 @@ def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
     return True
 
 
-def _maybe_retrigger(pending: dict, base_url: str, claude_cmd: str, timeout: int, model: str,
+def _maybe_retrigger(pending: dict, base_url: str, claude_cmd: str, model: str,
                      sidecar_dir: Path | None = None) -> None:
     """Follow-up während des Laufs (2026-07-15): eine `@gc:`-Nachricht, die reinkam,
     NACHDEM dieser Run seinen Prompt schon gebaut hatte, wird von ihm nie gesehen — und
@@ -2110,8 +2162,10 @@ def _maybe_retrigger(pending: dict, base_url: str, claude_cmd: str, timeout: int
         "Note: this message arrived before the previous reply was finished — read the previous "
         "@gc-re: turn too if necessary.")
     print(f"todo-board: auto-retrigger for {gc_id} ({len(missed)} message(s) arrived during the run)")
-    launch_gc_run(new_pending, base_url, claude_cmd, timeout, model=model,
-                  sidecar_dir=sidecar_dir)
+    # A long run is a one-shot grant. A message that arrived while it ran must never
+    # silently create another six-hour envelope; the follow-up returns to standard.
+    launch_gc_run(new_pending, base_url, claude_cmd, gc_runner.DEFAULT_TIMEOUT, model=model,
+                  sidecar_dir=sidecar_dir, run_mode="standard")
 
 
 def set_gc_last(board_path: Path, gc_id: str, value: str) -> None:
@@ -3220,6 +3274,23 @@ def _ritual_cycle(cfg: dict, now: datetime) -> tuple[datetime, datetime, str]:
     return datetime.combine(today_d, dtime(ahh, amm)), datetime.combine(today_d, dtime(hh, mm)), today_d.isoformat()
 
 
+def ritual_prompt(cfg: dict, now: datetime) -> str:
+    """Prompt eines Rituals — statisch, oder aus `rotation` (Coaching-Praktiken, S10 31.08.:
+    drei Praktiken je eine Woche, dann von vorn). `rotation` = {"start": YYYY-MM-DD,
+    "days": n, "prompts": [...]}; Index = vergangene Perioden seit start modulo Anzahl.
+    Bewusst kein Cron, kein Journal-Zustand: der Kalender IST der Zustand."""
+    rot = cfg.get("rotation")
+    if not isinstance(rot, dict) or not rot.get("prompts"):
+        return cfg.get("prompt", "")
+    try:
+        start = date.fromisoformat(rot["start"])
+        days = max(1, int(rot.get("days", 7)))
+    except (KeyError, ValueError, TypeError):
+        return cfg.get("prompt", "")
+    elapsed = max(0, (now.date() - start).days)
+    return str(rot["prompts"][(elapsed // days) % len(rot["prompts"])])
+
+
 def ritual_instance(rid: str, cfg: dict, now: datetime, journal: list[dict], active_from: str) -> dict:
     """Ein Ritual → seine heutige/aktuelle Instanz. Status-Reihenfolge: hidden (vor der
     Aktivierung ODER außerhalb des Sichtbarkeitsfensters) > done > overdue > open.
@@ -3227,7 +3298,7 @@ def ritual_instance(rid: str, cfg: dict, now: datetime, journal: list[dict], act
     das globale Gate-Silence (Override) lebt separat in gate_silence_active()."""
     appear_dt, deadline_dt, cycle = _ritual_cycle(cfg, now)
     out = {"id": rid, "title": cfg.get("title", rid), "kind": cfg.get("kind", "daily"),
-           "proof": cfg.get("proof", "single"), "prompt": cfg.get("prompt", ""),
+           "proof": cfg.get("proof", "single"), "prompt": ritual_prompt(cfg, now),
            "deadline": deadline_dt.isoformat(timespec="minutes"),
            "status": "hidden", "snoozed_until": "", "done_at": ""}
     if active_from and now.date().isoformat() < active_from:
@@ -4235,9 +4306,14 @@ class Handler(BaseHTTPRequestHandler):
             p = self._repo_file(unquote(self.path[len("/repo-file/"):]))
             if p is None:
                 return self._json(404, {"error": "not found"})
-            # .html gerendert (Entscheidungsblätter aus tmp/ sind genau dafür da), Rest als Text.
-            ctype = "text/html" if p.suffix.lower() == ".html" else "text/plain"
-            self._send(200, p.read_bytes(), f"{ctype}; charset=utf-8")
+            # .html gerendert (Entscheidungsblätter aus tmp/ sind genau dafür da), Bilder als
+            # Bilder (relative <img src> aus so einem HTML), Rest als Text.
+            suf = p.suffix.lower()
+            if suf in IMAGE_CTYPES:
+                self._send(200, p.read_bytes(), IMAGE_CTYPES[suf])
+            else:
+                ctype = "text/html" if suf == ".html" else "text/plain"
+                self._send(200, p.read_bytes(), f"{ctype}; charset=utf-8")
         elif self.path == "/api/actions":
             actions, err = load_actions()
             # Prompts bleiben server-seitig — die UI braucht nur Anzeige-Metadaten.
@@ -4524,8 +4600,11 @@ class Handler(BaseHTTPRequestHandler):
             p = Path(rel)
             p = p if p.is_absolute() else (GC_ROOT / rel)
             try:
+                # Bei rotierendem Prompt die Praktik der Woche mitschreiben, sonst weiß die
+                # Datei später nicht, worauf sich der Eintrag bezog.
+                label = f"_{ritual_prompt(cfg, now)}_\n" if cfg.get("rotation") else ""
                 with p.open("a", encoding="utf-8") as fh:
-                    fh.write(f"## {now.date().isoformat()}\n{proof}\n\n")
+                    fh.write(f"## {now.date().isoformat()}\n{label}{proof}\n\n")
             except OSError as e:  # noqa: BLE001 — Persist ist nice-to-have, darf den Haken nie blocken
                 print(f"todo-board: ritual persist_personal fehlgeschlagen ({rid}): {e}", file=sys.stderr)
         return self._json(200, {"ok": True})
@@ -4684,8 +4763,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "addr must be an object"})
         has_body = "body" in payload
         has_stage = "stage" in payload
-        if not has_body and not has_stage:
-            return self._json(400, {"error": "body or stage is required"})
+        has_parent = "parent" in payload
+        if not has_body and not has_stage and not has_parent:
+            return self._json(400, {"error": "body, stage or parent is required"})
 
         body: list[str] | None = None
         expected_body_etag = ""
@@ -4719,6 +4799,20 @@ class Handler(BaseHTTPRequestHandler):
             if stage is None:
                 return self._json(400, {"error": "stage must contain a stage value"})
 
+        parent: str | None = None
+        if has_parent:
+            # Umhängen unter ein Dach (oder mit "" wieder auf Top-Level). Bisher war das
+            # der einzige häufige Item-Schreibvorgang ohne API — der Agent musste
+            # `@gc-parent:` von Hand in board.md splicen (Faden 2128f6b7d172, 01./04.09.).
+            raw_parent = payload.get("parent")
+            if raw_parent is None:
+                raw_parent = ""
+            if not isinstance(raw_parent, str) or "\n" in raw_parent or "\r" in raw_parent:
+                return self._json(400, {"error": "parent must be a single @gc-id string ('' clears it)"})
+            parent = raw_parent.strip()
+            if parent.lower().startswith("@gc-parent:"):
+                return self._json(400, {"error": "parent is the bare @gc-id, not the tag line"})
+
         with board_write_guard(self.board_path):
             raw = self.board_path.read_text()
             board = parse_board(raw)
@@ -4734,6 +4828,22 @@ class Handler(BaseHTTPRequestHandler):
                              "body write would destroy or reorder them",
                     "etag": text_etag(raw),
                 })
+            if parent:
+                # Dieselbe Ein-Ebenen-Regel wie /api/gc-spawn-sub: Ziel muss existieren,
+                # darf selbst kein Sub sein, und das Item darf keine eigenen Subs haben.
+                idx = item_index(board)
+                target_item = idx.get(parent)
+                own_id = block_item.get("id", "")
+                if target_item is None:
+                    return self._json(404, {"error": f"No item with @gc-id {parent}"})
+                if own_id and parent == own_id:
+                    return self._json(400, {"error": "an item cannot be its own parent"})
+                if target_item.get("parent"):
+                    return self._json(409, {"error": "Only one level is allowed: the target is already a "
+                                                     f"sub-thread (parent {target_item['parent']})"})
+                if own_id and any(x.get("parent") == own_id for _s, _n, _c, x in _all_items(board)):
+                    return self._json(409, {"error": "Only one level is allowed: this item has "
+                                                     "sub-threads of its own"})
 
             if canonical:
                 matches = find_item(board, addr)
@@ -4759,6 +4869,9 @@ class Handler(BaseHTTPRequestHandler):
             if stage is not None and not any(
                     sev.get("text", "") == stage["text"] for sev in it.get("stages", [])):
                 it.setdefault("stages", []).append(stage)
+                changed = True
+            if parent is not None and parent != (it.get("parent") or ""):
+                it["parent"] = parent  # "" = Top-Level; der Parser hält den Key immer
                 changed = True
 
             # The proposed body may not smuggle in a format meta line. Example: a
@@ -4792,6 +4905,10 @@ class Handler(BaseHTTPRequestHandler):
         title = (payload.get("title") or "").strip()
         parent_id = (payload.get("parent_id") or payload.get("parent") or "").strip()
         ask = (payload.get("ask") or "").strip()
+        # `by: agent` = der Auftrag stammt vom Agenten (Runner-curl), nicht aus dem Feld des
+        # Owners: Sidecar-Kopf `# Agent brief:` statt `# <Owner> turn:`, damit spaetere
+        # Auswertungen die Datei nicht als Owner-Quelle lesen. Faden-Art bleibt "ask".
+        sidecar_kind = "brief" if (payload.get("by") or "").strip().lower() == "agent" else "ask"
         if not title or not parent_id:
             return self._json(400, {"error": "title and parent_id are required"})
         with board_write_guard(self.board_path):
@@ -4830,7 +4947,7 @@ class Handler(BaseHTTPRequestHandler):
                 child["thread"].append({"kind": "ask", "text": re.sub(
                     r"\s*\n+\s*", " · ",
                     sidecar.inline_turn(child["id"], title, ask,
-                                        self.board_path.parent / "gc-threads", kind="ask").strip())})
+                                        self.board_path.parent / "gc-threads", kind=sidecar_kind).strip())})
             target.insert(pos + 1, child)
             self._atomic_write(serialize_board(board))
             return self._json(200, {"ok": True, "id": child["id"], "parent": parent_id,
@@ -4845,10 +4962,15 @@ class Handler(BaseHTTPRequestHandler):
         addr = payload.get("addr") or {}
         if not gc_id and not addr:
             return self._json(400, {"error": "id or addr is missing"})
-        try:
-            timeout = int(payload.get("timeout") or gc_runner.DEFAULT_TIMEOUT)
-        except (TypeError, ValueError):  # VOR der Registry validieren — sonst bliebe RUNNING hängen
-            return self._json(400, {"error": "timeout must be a number"})
+        # Public UI policy: two named envelopes, owned by the server. A browser must not
+        # smuggle in arbitrary seconds; long is an explicit one-shot launch, never item state.
+        if "timeout" in payload:
+            return self._json(400, {"error": "timeout is server-owned; use run_mode standard or long"})
+        run_mode = (payload.get("run_mode") or "standard").strip()
+        run_timeouts = {"standard": gc_runner.DEFAULT_TIMEOUT, "long": gc_runner.LONG_TIMEOUT}
+        if run_mode not in run_timeouts:
+            return self._json(400, {"error": "run_mode must be standard or long"})
+        timeout = run_timeouts[run_mode]
         model = (payload.get("model") or "").strip()
         if model not in MODEL_CHOICES:
             return self._json(400, {"error": f"model must be one of: {', '.join(m or 'default' for m in MODEL_CHOICES)}"})
@@ -4875,13 +4997,15 @@ class Handler(BaseHTTPRequestHandler):
         pending = pending_entry(s, n, c, it, board)
         base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
         claude_cmd = claude_binary()  # Test-Hook (Fake-Binary)
-        if not launch_gc_run(pending, base_url, claude_cmd, timeout, model=model):
+        if not launch_gc_run(pending, base_url, claude_cmd, timeout, model=model,
+                             run_mode=run_mode):
             # launch_gc_run hat zwei Absagegründe, und die fühlen sich völlig verschieden
             # an: „läuft schon" (nichts tun) vs. Neustart-Drain (nach dem Tausch nochmal
             # drücken). Dasselbe Muster wie beim Action-Start (s. run_cockpit_action).
             return self._json(409, {"error": RESTART_DRAIN_MSG if restart_draining()
                                     else "A run for this item is already in progress"})
-        return self._json(202, {"ok": True, "id": gc_id, "model": model or "default"})
+        return self._json(202, {"ok": True, "id": gc_id, "model": model or "default",
+                                "run_mode": run_mode, "timeout": timeout})
 
     def _gc_compact(self, payload: dict) -> None:
         """Kontext-Saver (2026-07-16, Overlay-Blatt Q4=A): schickt `/compact` an die
@@ -4945,6 +5069,8 @@ class Handler(BaseHTTPRequestHandler):
         Ein Koordinator-Thread füttert launch_gc_run über ein Semaphor; vor jedem
         Start wird das Item re-validiert (Antwort kann inzwischen gelandet sein)."""
         import gc_runner
+        if payload.get("run_mode") not in (None, "", "standard"):
+            return self._json(400, {"error": "Long mode is one-shot and unavailable in run-all"})
         try:
             limit = max(1, min(3, int(payload.get("limit") or 2)))
             timeout = int(payload.get("timeout") or gc_runner.DEFAULT_TIMEOUT)

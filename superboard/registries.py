@@ -147,6 +147,18 @@ def load_rituals(path: Path) -> tuple[dict, list[str]]:
             problems.append("'prompt' must be non-empty text for rituals with proof")
         if "persist_personal" in entry and not _text(entry["persist_personal"], allow_empty=True):
             problems.append("'persist_personal' must be text")
+        if "rotation" in entry:
+            rot = entry["rotation"]
+            ok = isinstance(rot, dict) and isinstance(rot.get("prompts"), list) and rot["prompts"] \
+                and all(_text(x) for x in rot["prompts"]) and _text(rot.get("start")) \
+                and isinstance(rot.get("days", 7), int) and rot.get("days", 7) >= 1
+            if ok:
+                try:
+                    date.fromisoformat(rot["start"])
+                except ValueError:
+                    ok = False
+            if not ok:
+                problems.append("'rotation' needs start YYYY-MM-DD, days>=1 and a non-empty prompts list")
 
         if kind == "daily":
             deadline = entry.get("deadline")
