@@ -18,7 +18,7 @@ Invarianten, die JEDEN UI-Umbau überleben:
 
 Werkzeug: agent-browser-CLI (ist auf dem Mac eh installiert — KEIN pip-playwright,
 keine neue Dependency). Fehlt agent-browser (headless VPS instance): Skip mit Exit 0.
-Ist es installiert, startet aber trotz Warm-up-Retry nicht: echter Fehler statt falschem Grün.
+Ist es installiert, startet aber trotz drei Warm-up-Versuchen nicht: echter Fehler statt falschem Grün.
 Läuft NIE gegen die Live-board.md — eigener Server auf ephemerem Port, Temp-Board.
 Eigene Browser-Session `board-smoke`, wird am Ende geschlossen.
 
@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -64,7 +65,7 @@ SYNTH = ("## SmokeThema\n\n### Jetzt\n\n- [ ] Smoke-Item *(2026-07-10)*\n"
          "  @gc-id: aaaaaaaaaaaa\n"
          "  @gc: Smoke-Frage\n"
          "  @gc-re: [Open README](README.md) · "
-         f"[Absolute README]({ABS_README})\n\n"
+         f"[Absolute README]({ABS_README}) · Raw absolute: {ABS_README}\n\n"
          "### Bald\n\n### Geparkt\n\n"
          "## My to-dos\n\n### Jetzt\n\n### Bald\n\n### Geparkt\n\n"
          "# Personen\n\n# Notizen\n")
@@ -97,10 +98,17 @@ def main() -> int:
     url = f"http://127.0.0.1:{httpd.server_address[1]}"
     browser_opened = False
     try:
-        # Daemon-Cold-Start-Quirk: erster open nach Stopp schlägt gern fehl → 1 Warm-up-Retry
-        opened = ab("open", "about:blank")
-        if opened.returncode != 0:
+        # Daemon-Cold-Start-Quirk: erster open nach Stopp schlägt gern fehl → Warm-up-Retry.
+        # Der frühere Sofort-Retry reichte nicht: er lief in dieselbe halb hochgefahrene
+        # Instanz und scheiterte identisch (falsches 🔴 im nightly Health-Check am 18.08.,
+        # 24.08. und 01.09.). Zwischen den Versuchen deshalb erst die Session abräumen und
+        # dem Daemon Zeit geben — von Hand reproduziert: nach open+close ist der Smoke grün.
+        for versuch in range(3):
             opened = ab("open", "about:blank")
+            if opened.returncode == 0:
+                break
+            ab("close")
+            time.sleep(1.5 * (versuch + 1))
         if opened.returncode != 0:
             check("smoke: installierter agent-browser startet", False)
             print(f"       {opened.stderr.strip()[:240]}")
@@ -223,6 +231,15 @@ def main() -> int:
             && absoluteRepoLink?.dataset.repoViewer === 'rendered'
             && typeof absoluteRepoLink.onclick === 'function'
             && !absoluteRepoLink.hasAttribute('target');
+          // Welche Datei _abs_repo_file() gewaehlt hat, haengt an der Installation — der
+          // Test prueft die BEHANDLUNG eines rohen absoluten Pfades, nicht den Repo-Aufbau.
+          const rawAbsoluteRepoLink = Array.from(dialog?.querySelectorAll('a.pathlink') || [])
+            .find(a => a.textContent.startsWith('/') && a.textContent.endsWith('.md'));
+          const rawAbsoluteRepoLinkStyled = rawAbsoluteRepoLink?.getAttribute('href')
+              ?.startsWith('/repo-file/%2F')
+            && rawAbsoluteRepoLink?.dataset.repoViewer === 'rendered'
+            && typeof rawAbsoluteRepoLink.onclick === 'function'
+            && !rawAbsoluteRepoLink.hasAttribute('target');
           const send = dialog?.querySelector('.gc-actions .send');
           const run = dialog?.querySelector('.gc-actions .run-btn');
           const resolveBg = token => {
@@ -241,6 +258,7 @@ def main() -> int:
             key: 'Escape', bubbles: true, cancelable: true
           }));
           return JSON.stringify({openerSemantic, semantic, repoLinkStyled, absoluteRepoLinkStyled,
+            rawAbsoluteRepoLinkStyled,
             actionHierarchy,
             closed: !document.querySelector('.gc-overlay')});
           })()
@@ -254,6 +272,7 @@ def main() -> int:
             a11y_result, restored_focus = {}, False
         a11y_ok = (a11y_result == {"openerSemantic": True, "semantic": True,
                                    "repoLinkStyled": True, "absoluteRepoLinkStyled": True,
+                                   "rawAbsoluteRepoLinkStyled": True,
                                    "actionHierarchy": True,
                                    "closed": True}
                    and restored_focus is True)

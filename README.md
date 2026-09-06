@@ -5,6 +5,11 @@ conversation with a coding agent.** Add ordinary work first; delegate research,
 writing or changes when that helps. The underlying state stays in plain files
 you own.
 
+**For you if** you already run coding agents (Claude Code today) on several
+things at once and the review load, not the typing, is the bottleneck.
+**Not for you if** you have no agent yet, or one task at a time — for one task,
+use the terminal. Everything below assumes an agent is in the loop.
+
 [![leak scan](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml/badge.svg?branch=main)](https://github.com/bmeindl/superboard/actions/workflows/leak-scan.yml)
 
 ![Typing a task into the board, handing it to an agent, answering a decision sheet in a card that came back, sending the agent on, reading the result, and ticking the card off](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-loop.gif)
@@ -84,6 +89,51 @@ what is off-limits, ask it to change its local operating rules, or ask for exact
 terminal handoff commands when an interactive step is needed. The files and git diff
 remain the review surface.
 
+## What the file looks like
+
+The whole board is one markdown file, `inbox/board.md`, read and written by the
+server. Rows are topics, columns are `Now · Next · Backlog`, a card is a checkbox
+line with an optional body and the thread underneath:
+
+```md
+## Product
+
+### Now
+- [ ] Renew the domain *(2026-09-05)*
+  Expires on the 20th; registrar login is in the password manager.
+  @gc-id: 3f9a2c7b1d4e
+  @gc: Check which registrar it is and draft the renewal steps.
+  @gc-re: It is Namecheap; one click in the dashboard renews it. Steps below.
+
+### Next
+
+### Backlog
+```
+
+Open it in any editor to read; write through the server (below), not by hand.
+
+## The write edge: post into a thread from anywhere
+
+Already have your own automation, board, or agents? You do not have to switch.
+Every card is an addressable thread, and the server is the single writer, so
+anything can append to it safely. Two ways in:
+
+```sh
+# 1 · the client copied into every workspace (pure stdlib, any python3)
+python3 .superboard/board_write.py --new-card 'Renew the domain' \
+  --topic Product --col Now --ask 'Check which registrar it is'
+python3 .superboard/board_write.py --id 3f9a2c7b1d4e --show          # body + etag
+python3 .superboard/board_write.py --id 3f9a2c7b1d4e --stage 'tested · pytest *(2026-09-05)*'
+
+# 2 · the HTTP endpoint the runner itself uses to report back
+curl -s localhost:47822/api/gc-append -H 'content-type: application/json' \
+  -d '{"kind":"reply","text":"Nightly build green.","addr":{"id":"3f9a2c7b1d4e"}}'
+```
+
+`kind` is `ask` (you, to the agent), `reply` (an agent, to you), `done`, or `sys`.
+A cron job, a CI step, or a different agent can post into a card this way; the
+board shows it as a normal thread turn. Details in [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.3.0/docs/USING-SUPERBOARD.md#writing-into-the-board-from-outside).
+
 ## Why local files?
 
 Superboard has no cloud account, database, or sync service. The board, context,
@@ -111,7 +161,7 @@ The mechanics work on day one: board, runner, standing threads, decision sheets,
 
 ## Where this goes
 
-Today, Superboard is a board. The direction is a working morning that starts with three prepared items instead of forty open loops — everything else researched, built, filed, or consciously not started while you were away, each weighed in the open against priorities you set. Questions that get sharper the longer you work together. And because everything it learns lives in inspectable files, changing models doesn't have to mean starting over. That's the target narrative, told honestly as direction — the full version is in [PITCH.md](https://github.com/bmeindl/superboard/blob/v0.2.0/PITCH.md). This board is step one of exactly it.
+Today, Superboard is a board. The direction is a working morning that starts with three prepared items instead of forty open loops — everything else researched, built, filed, or consciously not started while you were away, each weighed in the open against priorities you set. Questions that get sharper the longer you work together. And because everything it learns lives in inspectable files, changing models doesn't have to mean starting over. That's the target narrative, told honestly as direction — the full version is in [PITCH.md](https://github.com/bmeindl/superboard/blob/v0.3.0/PITCH.md). This board is step one of exactly it.
 
 ## Start here, then ask the agent
 
@@ -119,13 +169,13 @@ The board and its onboarding cards are the primary product documentation. The
 README deliberately stops at orientation; users should not need to study a
 manual before doing useful work.
 
-- [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.2.0/docs/USING-SUPERBOARD.md) — installation, workspace files,
+- [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.3.0/docs/USING-SUPERBOARD.md) — installation, workspace files,
   onboarding behavior, customization, and restart rules.
-- [Development and test rigs](https://github.com/bmeindl/superboard/blob/v0.2.0/docs/DEVELOPMENT.md) — sandbox, fresh-wheel test,
+- [Development and test rigs](https://github.com/bmeindl/superboard/blob/v0.3.0/docs/DEVELOPMENT.md) — sandbox, fresh-wheel test,
   and privacy gates.
-- [Architecture](https://github.com/bmeindl/superboard/blob/v0.2.0/superboard/ARCHITEKTUR.md) — contracts and trust boundaries for
+- [Architecture](https://github.com/bmeindl/superboard/blob/v0.3.0/superboard/ARCHITEKTUR.md) — contracts and trust boundaries for
   agents and contributors.
-- [Product direction](https://github.com/bmeindl/superboard/blob/v0.2.0/PITCH.md) · [Support posture](https://github.com/bmeindl/superboard/blob/v0.2.0/SUPPORT.md)
+- [Product direction](https://github.com/bmeindl/superboard/blob/v0.3.0/PITCH.md) · [Support posture](https://github.com/bmeindl/superboard/blob/v0.3.0/SUPPORT.md)
 
 Superboard is alpha-stage personal tooling, not a hosted multi-user project
 manager or a supported service. The point is a small, understandable frame that
@@ -133,4 +183,4 @@ your own agent and workspace can grow into.
 
 ## License
 
-MIT — see [LICENSE](https://github.com/bmeindl/superboard/blob/v0.2.0/LICENSE).
+MIT — see [LICENSE](https://github.com/bmeindl/superboard/blob/v0.3.0/LICENSE).

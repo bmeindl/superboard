@@ -431,3 +431,52 @@ def test_zufalls_pool_zieht_nur_signalfreie_ungepruefte_faeden():
     )
     assert set(pool) == {"sauber000001", "wieder000001"}
     assert pool["wieder000001"][1] == "2026-08-16"
+
+
+def test_undatierter_turn_ausserhalb_des_radius_erbt_nicht_das_item_datum(tmp_path):
+    """Retro 02.09.: an einem Cockpit-Dauerläufer stand ein Crash-Paar vom 17.08. als 02.09.,
+    weil kein Sidecar im ±2-Radius lag und der Fund auf das Item-Datum zurückfiel. Das nächste
+    ältere Sidecar ist eine ehrliche untere Schranke und schneidet den Fund aus dem Fenster."""
+    board = tmp_path / "board.md"
+    board.write_text(
+        "# Cockpit\n"
+        "- [ ] Dauerlaeufer *(2026-09-02)*\n"
+        "  @gc-id: cock123\n"
+        "  @gc-re: ok … → volle Antwort: inbox/gc-threads/cock123-20260817-140000-aaaa.md\n"
+        "  @gc: try again\n"
+        "  @gc-re: ❌ Agent run failed: is_error=True subtype=error_during_execution\n"
+        "  @gc: try again\n"
+        "  @gc-re: ❌ Agent run failed: is_error=True subtype=error_during_execution\n"
+        "  @gc: try again\n"
+        "  @gc-re: ❌ Agent run failed: is_error=True subtype=error_during_execution\n"
+        "  @gc: kurz\n"
+        "  @gc-re: kurz\n",
+        encoding="utf-8",
+    )
+    crashes = [f for f in retro_scan.scan_board(retro_scan.parse_board(board), date(2026, 1, 1))
+               if f.signal == "crash"]
+    assert len(crashes) == 3
+    assert {f.datum for f in crashes} == {"2026-08-17"}          # frueher: 2026-09-02 fuer den letzten
+    assert all(not retro_scan.im_fenster(f, date(2026, 8, 23)) for f in crashes)
+    assert crashes[-1].quelle.startswith("board.md (Datum ≈")
+
+
+def test_kill_echo_im_faden_zaehlt_nicht_doppelt(tmp_path):
+    """Der Wächter schreibt jeden Kill in killed-runs.jsonl UND als ❌-Echo in den Faden.
+    Retro 02.09.: derselbe idle-Abbruch stand als killed·3 und crash·2 in der Liste."""
+    board = tmp_path / "board.md"
+    board.write_text(
+        "# Themen\n"
+        "- [ ] Langlauf *(2026-08-26)*\n"
+        "  @gc-id: kill123\n"
+        "  @gc-re: ❌ Aborted after 114 min: no activity for 15 min (stalled) — 100 steps"
+        " … → volle Antwort: inbox/gc-threads/kill123-20260826-200002-abcd.md\n"
+        "  @gc: cont\n"
+        "  @gc-re: ❌ Agent run failed: no result from Codex (Broken pipe)\n",
+        encoding="utf-8",
+    )
+    items = retro_scan.parse_board(board)
+    ohne = [f.signal for f in retro_scan.scan_board(items, date(2026, 8, 1))]
+    mit = [f.beleg for f in retro_scan.scan_board(items, date(2026, 8, 1), {"kill123"})]
+    assert ohne.count("crash") == 2                # ohne killed-Eintrag bleibt das Echo der Beleg
+    assert len(mit) == 1 and "Codex" in mit[0]     # mit killed-Eintrag faellt nur das Echo weg

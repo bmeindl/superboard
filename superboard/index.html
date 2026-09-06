@@ -563,7 +563,13 @@
   .gc-btn:disabled { opacity: .55; cursor: default; }
   /* Ereignisstrom inline: eigene Scrollfläche, damit der Faden darunter erreichbar bleibt. */
   .gc-stream {
-    margin: 0 18px 12px; max-height: 260px; overflow-y: auto;
+    /* Owner-Feedback 2026-08-26 („meist sehe ich da nur zwei Zeilen") — das Overlay ist eine Flex-
+       Spalte mit Deckel, und ein scrollendes Kind (min-height:auto -> 0) wird darin von
+       Faden und Kontext plattgedrückt. Deshalb ein harter Boden von rund
+       fünf Zeilen (5 x ~21px + Kopfzeile + Polster): gemessen fiel das Panel im kleinen
+       Fenster von 260px auf 18px zusammen. Schrumpfen bleibt erlaubt (flex-shrink 1), der
+       Boden hält es auf; derselbe Effekt wie beim Terminal-Panel, das auf 232px fiel. */
+    margin: 0 18px 12px; flex: 0 1 auto; min-height: 148px; max-height: 260px; overflow-y: auto;
     border: 1px solid var(--line); border-radius: var(--radius-panel);
     background: var(--board); padding: 8px 10px;
     font-family: var(--mono); font-size: var(--fs-meta); line-height: 1.5;
@@ -782,6 +788,12 @@
     padding: 2px 4px; box-shadow: var(--lift-1);
   }
   .item.tools-open .tools { display: flex; }
+  /* Die Hover-Karte hebt sich per transform an — das macht aus ihr einen STACKING CONTEXT,
+     in dem `.tools { z-index: 8 }` gefangen ist (gemeldet 2026-09-01: Toolbar lag hinter der
+     Nachbarkarte bzw. hinter dem Header). Ein eigener z-index auf der offenen Karte hebt sie
+     über ihre Geschwister — bewusst 3, also UNTER der sticky Kopfzeile (5): die Toolbar soll
+     nie über dem Header liegen, sie klappt stattdessen nach unten (.tools-below). */
+  .item.tools-open { z-index: 3; }
   /* Hover-Brücke übers ganze Item (28.07.): die Toolbar hängt rechtsbündig -26px
      über dem Item, ".tools" ist aber ein DOM-Kind von ".item" -> Weg direkt-nach-oben
      kreuzt oft eine LÜCKE, die zu keinem der beiden gehört (der Nutzer: "verschwindet manchmal,
@@ -791,6 +803,12 @@
   .item.tools-open::before {
     content: ""; position: absolute; top: -26px; left: 0; right: 0; height: 26px;
   }
+  /* Umklappen nach UNTEN für die oberste Kartenreihe (2026-09-01): dort liegt der Platz
+     über der Karte hinter der sticky Kopfzeile (z-index 5) bzw. der Spaltenleiste — die
+     Toolbar mit „💬 S-Agent" (= Faden öffnen) schnitt in den Header-Rahmen und war halb
+     verdeckt/nicht klickbar. .tools-below setzt sie unter die Karte; Hover-Brücke mit. */
+  .item.tools-open.tools-below .tools { top: auto; bottom: -26px; }
+  .item.tools-open.tools-below::before { top: auto; bottom: -26px; }
   .tools button {
     border: 0; background: none; color: var(--muted); cursor: pointer;
     font-size: 12px; border-radius: var(--radius-control); padding: 3px 8px;
@@ -1905,12 +1923,16 @@ function runState(id) {
   const since = runningSince[id], b = beats[id] || {};
   const mins = since ? Math.max(0, (Date.now() / 1000 - since) / 60) : 0;
   const quiet = b.last_event ? (Date.now() / 1000 - b.last_event) : null;
+  const long = b.run_mode === "long";
   return {
     since, mins, steps: b.steps || 0, tool: b.last_tool || "", rate: b.rate_limit || "",
+    long, capSeconds: b.cap_seconds || 0,
     resumable: !!b.session_id,
     stalled: quiet !== null && quiet > STALL_SEC,
     quiet,
-    level: mins >= RUN_BAD_MIN ? "bad" : mins >= RUN_WARN_MIN ? "warn" : "",
+    // A deliberate long run must not turn red merely for exceeding the normal duration.
+    // Inactivity remains visible through `stalled` and the runner watchdogs remain unchanged.
+    level: long ? "" : mins >= RUN_BAD_MIN ? "bad" : mins >= RUN_WARN_MIN ? "warn" : "",
   };
 }
 
@@ -1920,6 +1942,7 @@ function runState(id) {
 // als Dauerrauschen über zwanzig Karten hinweg kosten sie mehr, als sie bringen.
 function runLine(id) {
   const s = runState(id), bits = [];
+  if (s.long) bits.push("Long · 6h cap");
   if (s.since) bits.push(fmtElapsed(s.since));
   if (s.steps) bits.push(`step ${s.steps}`);
   if (s.tool) bits.push(`last ${s.tool}`);
@@ -1944,7 +1967,7 @@ function paintRunPill(pill, id) {
   // Uhr ist an sich schon eindeutig — „bei den ongoing kann man nur die Zeit zeigen,
   // ohne bot". Die Färbung (20/45 min) trägt die Warnung, das Detail liegt einen
   // Hover bzw. Klick entfernt. Fallback nur in der Sekunde vor dem ersten Ereignis.
-  pill.textContent = s.since ? fmtElapsed(s.since) : "running";
+  pill.textContent = (s.long ? "6H · " : "") + (s.since ? fmtElapsed(s.since) : "running");
   const warn = s.level === "bad" ? " — unusually long run; worth checking"
     : s.level === "warn" ? " — taking longer than usual" : "";
   pill.title = "Board agent working · " + (runLine(id) || "no events yet")
@@ -2890,6 +2913,28 @@ function gcStatusPill(loc, it) {
   return null;
 }
 let toolsHideTimer = null, currentOpenTools = null;  // schwebende Hover-Toolbar mit Grace-Period
+
+// Oberkante des freien Bereichs: alles darüber ist sticky (Kopfzeile, Spaltenleiste) und
+// würde die schwebende Toolbar verdecken. Wird live gemessen, weil beide Leisten je nach
+// Ansicht/Fensterbreite unterschiedlich hoch sind (Cockpit vs. To-dos vs. Dev).
+function stickyTopEdge() {
+  let edge = 0;
+  for (const sel of ["header", ".colheads"]) {
+    const n = document.querySelector(sel);
+    if (!n) continue;
+    const cs = getComputedStyle(n);
+    if (cs.position !== "sticky" && cs.position !== "fixed") continue;
+    edge = Math.max(edge, n.getBoundingClientRect().bottom);
+  }
+  return edge;
+}
+// Passt genug Toolbar (26px) zwischen sticky Leiste und Kartenoberkante? Sonst nach unten.
+function placeTools(div) {
+  if (!div || !div.isConnected) return;
+  div.classList.toggle("tools-below", div.getBoundingClientRect().top - 26 < stickyTopEdge() + 2);
+}
+// Beim Scrollen mit offener Toolbar wandert die Karte unter die Kopfzeile — nachjustieren.
+addEventListener("scroll", () => placeTools(currentOpenTools), { passive: true });
 
 // Live-Check statt Flag: Adder-Inputs und contenteditables sind so IMMER geschützt
 const isEditing = () => {
@@ -3903,7 +3948,7 @@ function crewMenu(runIds, past) {
     const st = runState(id);
     h += `<div class="gc-cm-row" data-crew-id="${id}">${crewIco(true)}`
       + `<span class="ttl">${esc(crewTitle(id))}</span>`
-      + `<span class="mdl">${esc(runnerLabel(id))}</span>`
+      + `<span class="mdl">${st.long ? "6H" : esc(runnerLabel(id))}</span>`
       + `<span class="tim">${st.since ? esc(fmtElapsed(st.since)) : ""}</span>`
       + `<span class="tok"></span>`
       + `<span class="ext">${st.steps ? "step " + st.steps : ""}</span></div>`;
@@ -4885,7 +4930,7 @@ function closeGcOverlay({ restoreFocus = true } = {}) {
 // Frontend-Version: load() holt nur Daten — ein offener Tab (Dock-App!) fährt sonst ewig das
 // alte JS. Der Poll-Tick vergleicht diese Konstante gegen die aktuell servierte index.html
 // und lädt die Seite bei Abweichung neu. Bei jedem Frontend-Change hochzählen!
-const APP_VERSION = "2026-08-27b";
+const APP_VERSION = "2026-09-04e";
 
 // Escape + Mini-Markdown (nur inline: **fett**, *kursiv*, `code`, [Text](url)).
 // Faden-Turns und Kontext-Block sind keine Editierflächen — gerendertes HTML ist dort safe;
@@ -4914,18 +4959,30 @@ function mdInline(s) {
   // eines Code-Spans (`a**b**c` wurde vorher gefettet).
   const code = [];
   const q = x => x.replace(/"/g, "&quot;");
+  // Erzeugte Tags/URLs ebenfalls rausparken: sonst greift die Emphase-Regel in ein
+  // href/src hinein (`.../foo_bar.md` wurde kursiv). Der Link-TEXT bleibt draussen und
+  // darf weiter fett/kursiv werden.
+  const raw = [];
+  const park = x => "\u0001" + (raw.push(x) - 1) + "\u0001";
   let t = esc(s).replace(/`([^`\n]+)`/g, (_m, c) => "\u0000" + (code.push(c) - 1) + "\u0000");
   t = t
     .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, u) => {
-      const h = mdUrl(u); return h ? `<img src="${q(h)}" alt="${q(alt)}">` : m;
+      const h = mdUrl(u); return h ? park(`<img src="${q(h)}" alt="${q(alt)}">`) : m;
     })
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, txt, u) => {
-      const h = mdUrl(u); return h ? `<a href="${q(h)}" target="_blank">${txt}</a>` : m;
+      const h = mdUrl(u); return h ? `<a ${park(`href="${q(h)}" target="_blank"`)}>${txt}</a>` : m;
     })
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/gm, "$1<em>$2</em>")
+    // Unterstrich-Emphase (01.09.): Dokumente schreiben die Lede haeufig als
+    // `_**…**_`. Ohne diese beiden Regeln stand das rohe `_` im gerenderten Viewer —
+    // „ein Unterstrich am Anfang". Intraword bleibt tabu (snake_case, file_name.md):
+    // Öffner darf nicht auf einem Wortzeichen sitzen, Schließer nicht vor einem stehen.
+    .replace(/(^|[^\w_])__([^_]+)__(?!\w)/g, "$1<strong>$2</strong>")
+    .replace(/(^|[^\w_])_([^_]+)_(?!\w)/g, "$1<em>$2</em>")
     .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
-  return t.replace(/\u0000(\d+)\u0000/g, (_m, i) => `<code>${code[i]}</code>`);
+  return t.replace(/\u0001(\d+)\u0001/g, (_m, i) => raw[i])
+    .replace(/\u0000(\d+)\u0000/g, (_m, i) => `<code>${code[i]}</code>`);
 }
 // Repo-relative Markdown-Links und nackte Repo-Pfade benutzen denselben gerenderten Viewer.
 // mdInline erzeugt Links als HTML, linkifyPaths sieht deren Text absichtlich nicht als neuen
@@ -4946,7 +5003,7 @@ function wireRepoLinks(root) {
 // Sidecars. Zwei Segmente aufwärts + bekannte Endung, damit "z.B. 3.5" o.ä. nicht anschlägt.
 // json VOR js + \b am Ende: Alternation nimmt den ersten Treffer — "…out.json" wurde sonst
 // als "…out.js" gematcht und der Link brach vor dem "on" ab (2026-07-15).
-const PATH_RE = /(?:[\w.-]+\/)+[\w.-]+\.(?:md|txt|py|ts|json|js|html|css|ya?ml|sh|csv|sql|toml)\b/g;
+const PATH_RE = /\/?(?:[\w.-]+\/)+[\w.-]+\.(?:md|txt|py|ts|json|js|html|css|ya?ml|sh|csv|sql|toml)\b/g;
 // Ersetzt wird auf TEXT-Knoten, nicht auf dem HTML-String: sonst zerschießt ein Pfad-Treffer
 // die href="" eines md-Links oder den Inhalt eines <code>-Spans.
 function linkifyPaths(root) {
@@ -4968,7 +5025,7 @@ function linkifyPaths(root) {
       if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
       const a = el("a", "pathlink");
       a.textContent = rel;
-      a.href = "/repo-file/" + rel.split("/").map(encodeURIComponent).join("/");
+      a.href = mdUrl(rel) || "#";
       a.title = "Open: " + rel;
       frag.appendChild(a);
       last = m.index + rel.length;
@@ -5051,10 +5108,23 @@ const mdIsTableSep = l => l.includes("|") && l.includes("-") && /^[\s|:-]+$/.tes
 function mdBlocks(md) {
   const lines = md.replace(/\r\n?/g, "\n").split("\n");
   const out = [];
+  // YAML-Frontmatter (01.09.): `---` in Zeile 1 ist KEINE Trennlinie. Vorher rendert
+  // sie als <hr> ganz oben plus die Metazeilen als Fliesstext — VS Code zeigt den Block
+  // gar nicht. Wir zeigen ihn kompakt und gedaempft, statt ihn zu verlieren.
+  if (lines[0] !== undefined && /^---\s*$/.test(lines[0])) {
+    const end = lines.findIndex((l, n) => n > 0 && /^---\s*$/.test(l));
+    if (end > 0) {
+      out.push(`<pre class="fm">${esc(lines.slice(1, end).join("\n"))}</pre>`);
+      lines.splice(0, end + 1);
+    }
+  }
   const lists = [];          // offene Listen, äußerste zuerst: {indent, tag, li}
   let para = [];
   const flushPara = () => {
-    if (para.length) { out.push(`<p>${para.map(mdInline).join("<br>")}</p>`); para = []; }
+    // mdInline laeuft ueber den GANZEN Absatz (Zeilen mit \n verbunden), nicht pro Zeile:
+    // in unseren .md-Dateien laufen `**fett**`/`_kursiv_` ueber mehrere weiche Umbrueche,
+    // pro Zeile gerendert blieben Oeffner und Schliesser als Rohtext stehen (01.09.).
+    if (para.length) { out.push(`<p>${mdInline(para.join("\n")).replace(/\n/g, "<br>")}</p>`); para = []; }
   };
   const closeLists = toIndent => {
     while (lists.length && lists[lists.length - 1].indent > toIndent) {
@@ -5113,7 +5183,7 @@ function mdBlocks(md) {
       const buf = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*> ?/, ""));
       i--;
-      out.push(`<blockquote>${buf.map(mdInline).join("<br>")}</blockquote>`);
+      out.push(`<blockquote>${mdInline(buf.join("\n")).replace(/\n/g, "<br>")}</blockquote>`);
       continue;
     }
 
@@ -5162,6 +5232,8 @@ function mdToHtmlDoc(md, title) {
     h1,h2,h3,h4,h5,h6{letter-spacing:-.2px}hr{border:0;border-top:1px solid #e2e8f0;margin:20px 0}a{color:#2563eb}
     blockquote{margin:14px 0;padding:6px 14px;border-left:3px solid #cbd5e1;background:#f8fafc;color:#475569}
     img{max-width:100%}li>input[type=checkbox]{margin-right:6px}ul,ol{padding-left:22px}li{margin:2px 0}
+    /* YAML-Frontmatter: sichtbar, aber als Metadaten erkennbar (nicht als Fliesstext). */
+    pre.fm{background:#f8fafc;border:1px solid #e2e8f0;color:#475569;font-size:.82em;line-height:1.4}
     /* Tabellen (11.08.): breite Tabellen scrollen im eigenen Wrapper statt die Seite zu
        sprengen; zebra + sticky-freier, ruhiger Rahmen, damit Zellen ohne Linienrauschen lesbar sind. */
     .tbl{overflow-x:auto;margin:16px 0}
@@ -5672,6 +5744,53 @@ function openGcOverlay(loc, it) {
   const sendBtn = btn("Save", submit); sendBtn.className = "send";
   sendBtn.title = "Saves your message to this thread as a plain turn — it does NOT run the agent. Use ▶ Agent to dispatch it.";
   actions.appendChild(sendBtn);
+  let runBtn = null, modelSel = null;
+  async function startAgent(runMode = "standard") {
+    const text = draft.value.trim();
+    if (text) {
+      const preKey = draftKey(it);
+      if (!await gcAppend(loc, it, "ask", text)) return false;
+      it.thread = [...(it.thread || []), { kind: "ask", text }];
+      draft.value = ""; clearDraft(preKey);
+    }
+    else if (threadStatus(it) !== "for_gc") {
+      status("Enter a request first (or make sure the last turn is yours)", "error");
+      draft.focus(); return false;
+    }
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = "🤖 starting…"; }
+    try {
+      const res = await fetch("/api/gc-run", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: it.id, addr: itemAddr(loc, it), model: modelSel.value,
+                               run_mode: runMode }),
+      });
+      const j = await res.json();
+      if (!res.ok) {
+        status("⚠ Agent start: " + (j.error || res.status), "error");
+        if (runBtn) { runBtn.disabled = false; runBtn.textContent = "▶ Agent"; }
+        return false;
+      }
+      if (j.id) it.id = j.id;
+      // An unsaved/new card receives its stable id from /api/gc-run. The open
+      // overlay cached the old empty value, so update it before painting the run.
+      sub2.dataset.gcId = it.id || "";
+      setAgentModel(it.id, modelSel.value);  // Run zählt wie eine explizite Wahl fürs Item (id kommt ggf. erst jetzt)
+      if (!running.includes(it.id)) running.push(it.id);
+      // Keep the thread open: its persistent status line and run controls confirm that
+      // the click launched a process. Closing immediately made a successful start look
+      // like a no-op until the next board poll painted a small badge on the card.
+      refreshOverlayRun(it, "for_gc");
+      renderCrew();
+      status(runMode === "long"
+        ? "◷ Long run started · hard cap 6h — progress and the reply stay in this thread"
+        : "🤖 Agent started — progress and the reply stay in this thread", "saved");
+      return true;
+    } catch {
+      status("⚠ Could not start agent — is the server down?", "error");
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = "▶ Agent"; }
+      return false;
+    }
+  }
   {
     // Board-Agent: headless Claude-Session (Auto-Mode) arbeitet den Faden ab und
     // antwortet als @gc-re. Mit Text im Draft: erst absenden, dann direkt losrennen.
@@ -5681,8 +5800,9 @@ function openGcOverlay(loc, it) {
     // Ohne Draft greift weiter der Guard unten ("Erst einen Auftrag eintippen").
     // Modellwahl (persistiert, gilt auch für Run-all): eine fremde Installation
     // beginnt ohne --model-Flag beim Claude-CLI-Default. Jede spätere benannte Wahl
-    // wird als --model-Flag erzwungen, auch beim Resume.
-    const modelSel = document.createElement("select");
+    // wird als --model-Flag erzwungen, auch beim Resume. Zuweisung statt Deklaration:
+    // startAgent() oben schließt über modelSel/runBtn (Long-Run-Start braucht dieselben).
+    modelSel = document.createElement("select");
     modelSel.className = "model-select";
     fillProfiles(modelSel);
     modelSel.value = agentModelFor(it.id);  // pro Item gemerkt — Modellwechsel mitten im Faden kostet Session-Cache
@@ -5691,38 +5811,8 @@ function openGcOverlay(loc, it) {
     modelSel.title = PROFILE_HINT + " Remembered PER ITEM (switching mid-thread makes the session's "
       + "prompt cache cold); without an item-specific choice, the global default applies.";
     const isRunning = running.includes(it.id) || queued.includes(it.id);
-    const runBtn = btn(running.includes(it.id) ? "🤖 running…" : queued.includes(it.id) ? "🤖 queued…" : "▶ Agent", async () => {
-      const text = draft.value.trim();
-      if (text) {
-        const preKey = draftKey(it);
-        if (!await gcAppend(loc, it, "ask", text)) return;
-        it.thread = [...(it.thread || []), { kind: "ask", text }];  // sofort lokal nachziehen
-        draft.value = "";  // Ask ist gespeichert — erneuter Klick darf ihn nicht doppelt anhängen
-        clearDraft(preKey);
-      }
-      else if (threadStatus(it) !== "for_gc") { status("Enter a request first (or make sure the last turn is yours)", "error"); return; }
-      runBtn.disabled = true; runBtn.textContent = "🤖 starting…";
-      try {
-        const res = await fetch("/api/gc-run", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: it.id, addr: itemAddr(loc, it), model: modelSel.value }),  // addr = Fallback für Items ohne @gc-id
-        });
-        const j = await res.json();
-        if (!res.ok) { status("⚠ Agent start: " + (j.error || res.status), "error"); runBtn.disabled = false; runBtn.textContent = "▶ Agent"; return; }
-        if (j.id) it.id = j.id;
-        // An unsaved/new card receives its stable id from /api/gc-run. The open
-        // overlay cached the old empty value, so update it before painting the run.
-        sub2.dataset.gcId = it.id || "";
-        setAgentModel(it.id, modelSel.value);  // Run zählt wie eine explizite Wahl fürs Item (id kommt ggf. erst jetzt)
-        if (!running.includes(it.id)) running.push(it.id);
-        // Keep the thread open: its persistent status line and run controls confirm that
-        // the click launched a process. Closing immediately made a successful start look
-        // like a no-op until the next board poll painted a small badge on the card.
-        refreshOverlayRun(it, "for_gc");
-        renderCrew();
-        status("🤖 Agent started — progress and the reply stay in this thread", "saved");
-      } catch { status("⚠ Could not start agent — is the server down?", "error"); runBtn.disabled = false; runBtn.textContent = "▶ Agent"; }
-    });
+    runBtn = btn(running.includes(it.id) ? "🤖 running…" : queued.includes(it.id) ? "🤖 queued…" : "▶ Agent",
+                 () => startAgent("standard"));
     runBtn.className = "run-btn";
     runBtn.disabled = isRunning;
     // No runner, no run. Saying it on the control is the point: a disabled button with a
@@ -5819,7 +5909,8 @@ function openGcOverlay(loc, it) {
     doneBtn.className = "done-btn";
     doneBtn.title = "Context cut: the history remains, but the next agent run starts a FRESH session "
       + "that reads the old thread as text. The overlay stays open so you can continue writing. "
-      + "This does NOT complete the item; use ✓ Done in the footer or the card checkbox for that.";
+      + (loc.kind === "c" ? "Same cut as ✓ Done, which additionally closes the overlay."
+                          : "This does NOT complete the item; use ✓ Done in the footer or the card checkbox for that.");
     actions.appendChild(doneBtn);
   }
   // Hinweistexte nennen den Resume-Befehl des Runners, der die Session erzeugt hat —
@@ -5853,12 +5944,29 @@ function openGcOverlay(loc, it) {
       + `▶ Agent here to continue headlessly. Session-bound: ${resumeCmd} takes over the agent session.`;
     actions.appendChild(hb);
   }
+  // Cockpit pseudo-items get their OWN ✓ Done: their `[x]` means nothing (the card is
+  // permanent, the sweep never archives it), and tying the button to it made the button
+  // vanish once clicked. The tick is still wanted — it says "that is done" and, unlike
+  // ✂ New thread, it closes the overlay. So for actions ✓ Done = thread cut + close.
+  if (loc.kind === "c") {
+    if (st !== "closed" && events.length) {
+      const tickBtn = btn("✓ Done", async () => {
+        if (!await gcAppend(loc, it, "done", "")) return;
+        status(`✓ ${it.title} checked off — ▶ starts the next round`, "saved");
+        closeGcOverlay(); load();
+      });
+      tickBtn.className = "done-btn";
+      tickBtn.title = "Closes the round: thread cut (same as the ✓ on the card) and closes this "
+        + "overlay. History stays; the next ▶ starts a fresh session.";
+      actions.appendChild(tickBtn);
+    }
+  }
   // Item-Abschluss direkt im Arbeitskontext (SB3, Variante A): dieselbe kanonische
   // toggleDone()-Mechanik wie der Matrix-Haken — inklusive Ritual-Gate, doneDirty,
   // Faden-Schnitt und justDone. Nach Erfolg schließt das Overlay; die Karte bleibt bis
   // zum Reload sichtbar, damit der bestehende Matrix-Haken ein sofortiges Undo anbietet.
   // Bei bereits erledigten Karten gibt es hier keinen zweiten konkurrierenden Undo-Weg.
-  if (!it.done) {
+  else if (!it.done) {
     const completeBtn = btn("✓ Done", async () => {
       completeBtn.disabled = true;
       completeBtn.textContent = "✓ finishing…";
@@ -5886,6 +5994,14 @@ function openGcOverlay(loc, it) {
     menu.appendChild(b);
     return b;
   };
+  if (!running.includes(it.id) && !queued.includes(it.id)) {
+    const longRun = mItem("▶ Start long run · up to 6h", async () => {
+      menu.style.display = "none";
+      await startAgent("long");
+    });
+    longRun.title = "Starts exactly one run with a six-hour hard cap. Normal idle/tool-stall "
+      + "watchdogs and Stop still apply; follow-ups return to the standard two-hour cap.";
+  }
   if (it.session) {
     // Resume-Handle kopieren (D3): UUID vor dem " · label" — für `claude --resume <UUID>` im Terminal
     const cp = mItem("⧉ Copy session UUID", async () => {
@@ -6026,8 +6142,9 @@ function openGcOverlay(loc, it) {
   ov.appendChild(actions);
 
   back.appendChild(ov);
-  // Entscheidungsblatt rechts andocken (2026-08-11, Blatt Q1=A/Q2=A). Der Server sagt
-  // über it.sheet, ob der LETZTE Turn ein Blatt trägt. Zwei Dinge machen das billig:
+  // HTML-Beilage rechts andocken (2026-08-11, Blatt Q1=A/Q2=A; erweitert 26.08.). Der
+  // Server sagt über it.sheet, ob der LETZTE Turn ein Blatt, Artefakt oder eine Demo
+  // trägt. Zwei Dinge machen das billig:
   // /repo-file/ liefert das Blatt schon heute als echte Seite unter GLEICHER Herkunft aus,
   // und die Blätter tragen alle eine gen()-Funktion, die den Antwort-Markdown baut. Wir
   // rufen die also direkt im iframe auf — deshalb funktioniert „übertragen" auch mit den
@@ -6039,16 +6156,18 @@ function openGcOverlay(loc, it) {
     const panel = el("div", "gc-sheet");
     panel.addEventListener("mousedown", e => e.stopPropagation());
     const head = el("div", "sh-head");
-    // Dieselbe Andockstelle traegt zwei Dinge: das Entscheidungsblatt und die Klickstrecke,
-    // die eine fertige Funktion zeigt. Eine Demo fragt nichts, also heisst sie nicht
-    // „Decision sheet" und hat keinen Uebertragen-Knopf.
+    // Dieselbe Andockstelle traegt drei Dinge: Entscheidungsblatt, eigenstaendiges Artefakt
+    // und Klickstrecke. Nur ein Blatt fragt etwas, heisst „Decision sheet" und darf
+    // Antworten uebertragen; Demo und Artefakt haben keinen Uebertragen-Knopf.
     const isDemo = it.sheet_kind === "demo";
+    const isArtifact = it.sheet_kind === "artifact";
     head.appendChild(Object.assign(el("span", "sh-title"), {
-      textContent: (isDemo ? "Demo · " : "Decision sheet · ") + it.sheet.split("/").pop(),
+      textContent: (isDemo ? "Demo · " : isArtifact ? "Artifact · " : "Decision sheet · ")
+        + it.sheet.split("/").pop(),
       title: it.sheet,
     }));
     const takeBtn = el("button", "sh-take");
-    takeBtn.hidden = isDemo;
+    takeBtn.hidden = isDemo || isArtifact;
     takeBtn.textContent = "→ transfer";
     takeBtn.title = "Generate answers from the sheet and place them in the draft on the left — you still start the run yourself with ▶ Agent";
     const tab = el("a", "sc-tab");
@@ -7788,11 +7907,12 @@ function renderItem(loc, it, ii, col) {
       currentOpenTools.classList.remove("tools-open");
     div.classList.add("tools-open");
     currentOpenTools = div;
+    placeTools(div);
   };
   const hideToolsSoon = () => {
     clearTimeout(toolsHideTimer);
     toolsHideTimer = setTimeout(() => {
-      div.classList.remove("tools-open");
+      div.classList.remove("tools-open", "tools-below");
       if (currentOpenTools === div) currentOpenTools = null;
     }, 300);
   };

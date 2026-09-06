@@ -128,8 +128,9 @@ loaded before tab selection, and a configured Cockpit renders only zones contain
 actions, so a fresh install shows one zone rather than five empty ones. The
 zero-actions predicate remains for the workspace that deletes every card. The update
 card is only a prompt: it names `.claude/skills/superboard-update/SKILL.md`, which is
-seeded create-only from the package like every other starter file, so a stranger's
-first click has a skill to load. Base setup must still idempotently ensure one
+seeded from the package like every other starter file, so a stranger's first click
+has a skill to load; the card itself is offered once to an older workspace that never
+had it (stamped, so a deletion is final). Base setup must still idempotently ensure one
 extension card, inventory only non-secret capability metadata, and obtain approval
 before surgically editing `actions.json`.
 
@@ -194,10 +195,12 @@ version; a copied doc goes stale on the next upgrade, and onboarding cards
 - The agent contract (`contract.py`) always renders a safe core even with no
   workspace `board.contract.md` present; an instance file, if present, must be
   well-formed or startup fails loudly rather than silently degrading.
-- Bootstrap is create-only for user-owned workspace files. Restart and package
-  upgrade never overwrite existing instance content. The bundled board client is
-  refreshed in place because it is product mechanics, not user content; redirecting
-  runtime data never moves that advertised command path.
+- Bootstrap never overwrites content the user edited. Seeded starter skills carry a
+  provenance stamp (`.superboard/starter-stamps.json`, sha256 of what was seeded;
+  earlier releases' texts are known by hash): a copy still equal to what we wrote is
+  refreshed on upgrade, anything else is user-owned and left alone. The bundled board
+  client is refreshed in place because it is product mechanics, not user content;
+  redirecting runtime data never moves that advertised command path.
 - Setup steps are normal pending threads and never auto-run. Process start itself
   spends no agent tokens; the owner must explicitly click `▶ Agent` per step.
 - Completing from the card overlay and completing from the matrix share the same

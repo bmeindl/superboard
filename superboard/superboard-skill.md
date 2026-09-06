@@ -36,8 +36,8 @@ python3 .superboard/board_write.py --help
 python3 .superboard/board_write.py --id <gc-id> --show
 python3 .superboard/board_write.py --id <gc-id> --body-file <path> --body-etag <rev>
 python3 .superboard/board_write.py --id <gc-id> --stage '<stage> · <note> *(YYYY-MM-DD)*'
-python3 .superboard/board_write.py --new-card '<title>' --topic '<topic>' --col Jetzt
-python3 .superboard/board_write.py --ensure-card '<title>' --topic '<topic>' --col Jetzt
+python3 .superboard/board_write.py --new-card '<title>' --topic '<topic>' --col Now
+python3 .superboard/board_write.py --ensure-card '<title>' --topic '<topic>' --col Now
 python3 .superboard/board_write.py --new-topic '<name>'
 python3 .superboard/board_write.py --docs readme|architecture|changelog
 ```

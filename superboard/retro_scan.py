@@ -217,6 +217,21 @@ def zeit_nahebei(turns: list[tuple[str, str]], idx: int) -> tuple[str, str, str]
                     d, z = zeit_aus_pfad(m.group(1))
                     if d:
                         return (m.group(1) if weite == 0 else "board.md"), d, z
+    # Kein Anker im Radius: dann NICHT ohne Datum zurück (der Aufrufer nähme sonst das
+    # Item-Datum = letzte Aktivität). An Cockpit-Dauerläufern stand so ein Crash-Paar vom
+    # 17.08. am 02.09. als „neu" in der Liste — und weil das Item täglich läuft, wäre es
+    # nach jedem `--merke` wieder aufgetaucht (Retro 02.09.: 0bab153051b3, 41a3257db75c,
+    # d4fe159dc7a1 alle so fehldatiert). Turns stehen chronologisch: das nächste ÄLTERE
+    # Sidecar ist eine untere Schranke, das nächste JÜNGERE eine obere. Beides ist
+    # grob, aber ehrlich grob — und schneidet Altes aus dem Fenster, statt es zu erfinden.
+    for j in range(idx - 3, -1, -1):
+        m = RE_SIDECAR.search(turns[j][1])
+        if m and zeit_aus_pfad(m.group(1))[0]:
+            return "board.md (Datum ≈ ab älterem Sidecar)", zeit_aus_pfad(m.group(1))[0], ""
+    for j in range(idx + 3, len(turns)):
+        m = RE_SIDECAR.search(turns[j][1])
+        if m and zeit_aus_pfad(m.group(1))[0]:
+            return "board.md (Datum ≈ bis jüngerem Sidecar)", zeit_aus_pfad(m.group(1))[0], ""
     return "board.md", "", ""
 
 
@@ -261,7 +276,15 @@ def antwort_zaehlt_fuer_schleife(text: str, seit: date) -> bool:
         return True
 
 
-def scan_board(items: list[Item], seit: date) -> list[Fund]:
+# Der Wächter schreibt jeden Kill zweimal: als Zeile in killed-runs.jsonl UND als
+# ❌-Echo in den Faden (gc_runner.py ~1347ff). Der Faden-Text ist nur das Echo — der Beleg
+# mit Transkript liegt beim `killed`-Fund. Retro 02.09.: derselbe idle-Abbruch an
+# 885210273914 stand als killed·3 UND crash·2 in der Liste.
+RE_KILL_ECHO = re.compile(r"^❌ (Aborted after|Safety stop|Agent-Run abgebrochen|Abgebrochen nach)")
+
+
+def scan_board(items: list[Item], seit: date,
+               killed_ids: frozenset[str] | set[str] = frozenset()) -> list[Fund]:
     funde: list[Fund] = []
     for it in items:
         datum = it.zeit[:10] if it.zeit else it.datum
@@ -320,6 +343,8 @@ def scan_board(items: list[Item], seit: date) -> list[Fund]:
                 # nach dem Crash wurde als zweiter Crash gezählt. Echte Meldungen kommen aus
                 # genau einer Hand (`server.py`: f"❌ Runner-Crash: {e}") und beginnen mit ❌.
                 if text.startswith(("❌", "Runner-Crash")) and not RE_LIMIT.search(text):
+                    if it.gc_id in killed_ids and RE_KILL_ECHO.match(text):
+                        continue  # zaehlt schon als `killed`, mit besserem Beleg
                     quelle, d_sc, z_sc = zeit_nahebei(it.turns, idx)
                     funde.append(Fund(
                         signal="crash", gc_id=it.gc_id, titel=it.titel, datum=d_sc or datum,
@@ -592,7 +617,8 @@ def main() -> None:
     if a.archiv:
         items += parse_board(ARCHIVE)
 
-    funde = scan_board(items, seit) + scan_killed(seit) + scan_receipts(seit)
+    gekillt = scan_killed(seit)
+    funde = scan_board(items, seit, {f.gc_id for f in gekillt}) + gekillt + scan_receipts(seit)
     funde = [f for f in funde if im_fenster(f, seit)]
     # Für die Zufalls-Stichprobe zählt JEDES Signal (auch 'reste', auch geprüfte):
     # „signalfrei" heißt wirklich frei, nicht nur unter den angezeigten Funden.

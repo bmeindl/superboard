@@ -204,7 +204,7 @@ def _duplicates(text: str, board: dict, m) -> tuple[list[dict], list[dict]]:
 
 
 def lint(text: str, server=None) -> dict:
-    """{'locked': bool, 'lost': int, 'lines': [...], 'items', 'thread', 'dup_ids', 'dup_themes'}"""
+    """{'locked': bool, 'lost': int, 'lines': [...], 'items', 'thread', 'dup_ids', 'dup_themes', 'dup_bodies'}"""
     m = server or _load_server()
     board = m.parse_board(text)
     missing = _norm(text, m) - _norm(m.serialize_board(board), m)
@@ -229,6 +229,7 @@ def lint(text: str, server=None) -> dict:
     found.sort(key=lambda d: d["line"])
 
     dup_ids, dup_themes = _duplicates(text, board, m)
+    dup_bodies = _dup_bodies(board, m)
 
     return {
         # locked haengt bewusst NUR am Round-Trip: Doppel sind ein Datenfehler,
@@ -241,7 +242,32 @@ def lint(text: str, server=None) -> dict:
         "thread": sum(len(it["thread"]) for _s, _n, _c, it in m._all_items(board)),
         "dup_ids": dup_ids,
         "dup_themes": dup_themes,
+        "dup_bodies": dup_bodies,
     }
+
+
+def _dup_bodies(board: dict, m) -> list[dict]:
+    """Dritte Eindeutigkeits-Invariante (30.08.): gleicher Inhalt unter VERSCHIEDENEN IDs.
+
+    Der Vorfall vom 30.08. hatte vier Items je 7x im Board — byte-identischer Titel
+    und Body, aber jede Kopie mit frischer `@gc-id`. Round-Trip und dup_ids sahen
+    nichts, weil jede Kopie für sich vollkommen gültig ist. Schlüssel ist deshalb
+    (Titel, Body-Zeilen); Faden-Turns zählen nicht, damit eine bewusst geklonte Karte
+    mit eigenem Faden nicht ewig gemeldet wird — Titel+Body gleich reicht als Signal."""
+    groups: dict[tuple, list[dict]] = {}
+    for _sec, _name, _col, it in m._all_items(board):
+        key = (it.get("title", "").strip(), tuple(l.rstrip() for l in it.get("body", [])))
+        if not key[0]:
+            continue
+        groups.setdefault(key, []).append(it)
+    out = []
+    for (title, _body), hits in groups.items():
+        ids = sorted({(h.get("id") or "").strip() for h in hits})
+        if len(hits) < 2 or len(ids) < 2:
+            continue  # gleiche ID -> das meldet dup_ids schon
+        out.append({"title": title[:70], "count": len(hits), "ids": ids})
+    out.sort(key=lambda d: (-d["count"], d["title"]))
+    return out
 
 
 def _dup_report(result: dict) -> list[str]:
@@ -255,10 +281,14 @@ def _dup_report(result: dict) -> list[str]:
         out += [f"  @gc-id {d['id']} an {d['count']} Items (Zeile {loc})"]
         for t in d["titles"]:
             out += [f"      {t}"]
+    for d in result.get("dup_bodies", []):
+        out += [f"  Item \"{d['title']}\" steht {d['count']}× mit gleichem Body unter "
+                f"verschiedenen IDs: {', '.join(d['ids'])}"]
     if not out:
         return []
     return ([f"⚠ STRUKTUR — {len(result['dup_themes'])} doppelte Überschrift(en), "
-             f"{len(result['dup_ids'])} doppelte @gc-id(s)", ""] + out +
+             f"{len(result['dup_ids'])} doppelte @gc-id(s), "
+             f"{len(result.get('dup_bodies', []))} inhaltsgleiche Item-Gruppe(n)", ""] + out +
             ["", "Doppel sperren das Board nicht, aber Schreibpfade treffen dann die",
              "ERSTE Kopie — Arbeitsstände laufen auseinander. Eine Kopie je Paar",
              "entfernen, dabei die neuere behalten.", ""])
@@ -300,7 +330,8 @@ def main() -> int:
 
     result = lint(path.read_text())
     print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else _report(result, path))
-    return 1 if result["locked"] or result["dup_ids"] or result["dup_themes"] else 0
+    return 1 if (result["locked"] or result["dup_ids"] or result["dup_themes"]
+                 or result["dup_bodies"]) else 0
 
 
 if __name__ == "__main__":

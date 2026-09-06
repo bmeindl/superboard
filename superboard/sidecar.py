@@ -38,9 +38,14 @@ EXPAND_MAX = 30_000       # Prompt-Expansion: Obergrenze pro Turn, mit sichtbare
 # (expand() liest die Datei als Ganzes) - darf uebersetzt werden, anders als markers.py.
 HEADER_LABEL = {
     "ask": f"{_cfg.OWNER} turn",
+    "brief": "Agent brief",   # agent-verfasster Auftrag (Sub-Faden-Spawn) — NIE die Worte des Owners
     "reply": "Board agent reply",
     "done": "Thread closed",
 }
+# Warum "brief" ein eigener Kopf ist (System Review 02.09.): Auswertungen, die Sidecars nach
+# den Worten des Owners durchsuchen, lesen `# <Owner> turn:` als Owner-Quelle. Agenten-Briefs
+# unter demselben Kopf wurden dabei als Fundstellen gezogen (Attributionsrisiko). Der Kopf
+# trennt den Autor, nicht die Turn-Art — im Faden bleibt es ein @gc:-Auftrag (kind "ask").
 
 # Zeitanteil eines Sidecar-Dateinamens, streng am Ende verankert: `-YYYYMMDD-HHMMSS-xxxx.md`.
 # Nur der Suffix ist Format — der Rest des Namens ist die gc-id und darf alles sein.

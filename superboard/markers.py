@@ -36,7 +36,9 @@ GC_TAG = {"ask": "@gc:", "reply": "@gc-re:", "done": "@gc-done:", "sys": "@gc-sy
 # New boards emit English labels. The legacy German labels remain readable forever:
 # these strings are persisted in board.md, so changing the writer without widening the
 # reader would orphan the externalized turn bodies in existing workspaces.
-REF_LABEL = {"ask": "full text", "reply": "full reply", "done": "full text"}
+# "brief" is the agent-authored variant of an "ask" turn (same label, different header).
+REF_LABEL = {"ask": "full text", "brief": "full text",
+             "reply": "full reply", "done": "full text"}
 
 # Typisierte Referenz, NUR am Zeilenende: "… → volle Antwort: inbox/gc-threads/<datei>.md"
 REF_RE = re.compile(

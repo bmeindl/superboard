@@ -13,7 +13,15 @@ files.** How much you decide alone follows this workspace's agent operating rule
 
 ## 1. Probe (read-only)
 
-- Installed package: `python3 -c "import importlib.metadata as m; print(m.version('superboard'))"`.
+- Which process serves the board? The workspace's `python3` usually cannot see the
+  package at all — the documented `uvx superboard <workspace>` runs it from a
+  disposable environment. Find the server through its port (the port in
+  `GC_BOARD_URL`, e.g. `http://127.0.0.1:47822`; unset → 47822):
+  `lsof -t -iTCP:<port> -sTCP:LISTEN` (Linux without lsof: `ss -ltnp 'sport = :<port>'`)
+  → `ps -o command= -p <pid>`. Exactly one pid, or stop and say so. The first word
+  is the serving interpreter; keep it, every probe below uses it. Keep the whole
+  command line too: it is the restart command.
+- Installed package: `<serving python> -c "import importlib.metadata as m; print(m.version('superboard'))"`.
 - Latest release: `curl -s https://pypi.org/pypi/superboard/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"`.
   No network → say so plainly and stop.
 - Release notes: `RELEASES.md` in the source distribution, or the project's GitHub
@@ -25,8 +33,18 @@ files.** How much you decide alone follows this workspace's agent operating rule
   `.claude/skills/*/SKILL.md` that records a `source:` and a `version:`, compare it
   with that catalogue's `catalog.json`. No catalogue and no recorded sources → skip
   this part silently; it is not an error.
-- How was it installed? `uv tool list` → `uv tool upgrade superboard`; `pipx list` →
-  `pipx upgrade superboard`; otherwise `pip install -U superboard`. Check, do not guess.
+- How was it installed? Read it off the serving interpreter's path. Check, do not guess:
+  - interpreter lives under uv's cache (`uv cache dir`; today `…/archive-v0/…` —
+    compare real paths, on macOS `/tmp` is `/private/tmp`) → **uvx**. There is
+    nothing to upgrade in place: the update is a restart, `uvx --refresh superboard
+    <every argument the running process showed>`, and the rollback is
+    `uvx superboard==<old> <same arguments>`. Change only the package selector,
+    never drop an argument such as `--port` or `--allow-code-repo`.
+  - `uv tool list` names superboard → `uv tool upgrade superboard`.
+  - `pipx list` names superboard → `pipx upgrade superboard`.
+  - otherwise `<serving python> -m pip install -U superboard`. Never `pip install`
+    into an interpreter that is not the one serving the board — that installs a second
+    copy the user never runs.
 
 ## 2. Report
 
@@ -41,6 +59,11 @@ line, stop.**
   patched the installed package itself. Check that only when something looks odd.
 - Skills: diff the installed `SKILL.md` against its source **at the recorded version**.
   Identical → clean upgrade. Different → a three-way situation; see step 4.
+- Seeded starter skills (`superboard`, `superboard-update`): the server refreshes them
+  on start only while they are untouched. After the restart, diff each against the
+  packaged copy (`<serving python> -c "import superboard, pathlib; print(pathlib.Path(superboard.__file__).parent)"`);
+  a remaining difference means the user edited it — apply the upstream change on top
+  of their edits as in step 4, never overwrite.
 
 ## 3b. Safety net before touching anything
 
@@ -53,15 +76,22 @@ changes. A package rollback is a reinstall of the previous version.
 ## 4. Act
 
 - Clean case: upgrade, restart the server the way it was started, then verify — the
-  server answers, the board renders, `/api/actions` still lists the same keys as before.
-  Record the old version first.
+  server answers, the board renders, `/api/actions` still lists the same keys as before,
+  and the new serving interpreter reports the new package version. Record the old
+  version first. Restarting kills the process you are running under? No: runs live in
+  their own process group, and a restarted server harvests a finished run's reply from
+  `.superboard/journal/`. Do stop the old server and start the new one in ONE detached
+  shell that waits for the port to be free, so a half-done restart cannot leave the
+  board down and the log survives for diagnosis:
+  `nohup sh -c 'kill <pid>; while kill -0 <pid> 2>/dev/null; do sleep 0.2; done; exec <restart command>' >.superboard/restart.log 2>&1 &`
 - Drift: resolve it yourself. Apply the upstream change on top of the user's edits,
   keep their intent, run the checks, and commit the result with a message that names
   both sides. Only when the merge is genuinely unresolvable — contradicting intent, or
   the checks still fail after two honest attempts — stop and ask; then start your reply
   with `❓` and show both versions.
-- Failure after the upgrade: reinstall the previous version
-  (`… install superboard==<old>`), restart, and report what failed with the log lines.
+- Failure after the upgrade: go back to the previous version the same way you came
+  (uvx: restart pinned to `superboard==<old>`; tools: `… install superboard==<old>`),
+  restart, and report what failed with the log lines.
 
 ## 5. Never
 

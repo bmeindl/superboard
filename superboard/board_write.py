@@ -16,10 +16,14 @@ Verbs:
     --show          print the current body and its bodyEtag (no write)
     --body-file     replace this item's body (needs --body-etag)
     --stage         append a process stage to this item
+    --parent        re-parent this item under another one (one level only)
     --new-card      create a to-do (never starts a run)
     --ensure-card   create a to-do only when that exact title is not already active
     --new-topic     create an empty board topic (row)
     --docs          print the product's own README / architecture doc
+
+Body replacements require the revision from the run prompt; ``--show`` returns the
+current state for interactive sessions or after an HTTP 409 conflict.
 
 Examples:
 
@@ -28,8 +32,10 @@ Examples:
       --body-file /tmp/body.md --body-etag 0123456789abcdef
     python3 .superboard/board_write.py --id a1b2c3d4e5f6 \
       --stage 'tested · pytest *(2026-08-22)*'
+    python3 .superboard/board_write.py --id a1b2c3d4e5f6 --parent b1c2d3e4f5a6
+    python3 .superboard/board_write.py --id a1b2c3d4e5f6 --parent ''   # back to top level
     python3 .superboard/board_write.py --new-card 'Renew the domain' \
-      --topic Admin --col Jetzt --card-body-file /tmp/notes.md
+      --topic Admin --col Now --card-body-file /tmp/notes.md
     python3 .superboard/board_write.py --new-topic 'Clients'
     python3 .superboard/board_write.py --docs readme
 """
@@ -46,6 +52,19 @@ from pathlib import Path
 
 DEFAULT_URL = "http://127.0.0.1:47822"
 COLUMNS = ("Jetzt", "Bald", "Geparkt")
+
+# The public column names are English; the internal keys (and therefore the dict keys
+# the server's JSON board speaks) are still the legacy German ones — see the comment
+# above COLUMN_FILE_NAMES in server.py for why that boundary exists. --col therefore
+# documents Now|Next|Backlog and maps them here; the legacy spellings keep working so
+# older scripts and workspaces do not break.
+COLUMN_ALIASES = {"Now": "Jetzt", "Next": "Bald", "Backlog": "Geparkt"}
+COLUMN_CHOICES = tuple(COLUMN_ALIASES) + COLUMNS
+
+
+def column_key(name: str) -> str:
+    """Map a public column name to the internal key; pass legacy keys through."""
+    return COLUMN_ALIASES.get(name.strip(), name.strip())
 
 
 def item_body_etag(body: list[str]) -> str:
@@ -181,12 +200,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="bodyEtag from the run prompt or --show (required with --body-file)")
     parser.add_argument("--stage",
                         help="single-line text after @stage:, e.g. 'tested · pytest *(2026-08-22)*'")
+    parser.add_argument("--parent", metavar="ID",
+                        help="re-parent under this @gc-id (one level only); "
+                             "'' moves it back to top level")
     parser.add_argument("--new-card", metavar="TITLE", help="create a to-do with this title")
     parser.add_argument("--ensure-card", metavar="TITLE",
                         help="create a to-do unless that exact title is already active")
     parser.add_argument("--topic", default="", help="target topic for --new-card")
-    parser.add_argument("--col", default="Jetzt", choices=COLUMNS,
-                        help="target column for --new-card (default: %(default)s)")
+    parser.add_argument("--col", default="Now", choices=COLUMN_CHOICES, metavar="COLUMN",
+                        help="target column for --new-card: Now|Next|Backlog "
+                             "(default: %(default)s)")
     parser.add_argument("--card-body-file", metavar="PATH",
                         help="body lines for --new-card; use - for stdin")
     parser.add_argument("--ask", default="",
@@ -209,9 +232,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.new_card or args.ensure_card:
             body = _text_from(args.card_body_file).splitlines() if args.card_body_file else []
             title = args.new_card or args.ensure_card
-            result = (ensure_card(base_url, title, args.topic, args.col, body, args.ask)
+            col = column_key(args.col)
+            result = (ensure_card(base_url, title, args.topic, col, body, args.ask)
                       if args.ensure_card else
-                      new_card(base_url, title, args.topic, args.col, body, args.ask))
+                      new_card(base_url, title, args.topic, col, body, args.ask))
             print(json.dumps(result, ensure_ascii=False))
             return 0
 
@@ -219,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--id is required for --show, --body-file, and --stage")
 
         if args.show:
-            if args.body_file is not None or args.stage is not None:
+            if args.body_file is not None or args.stage is not None or args.parent is not None:
                 parser.error("--show cannot be combined with write options")
             item = fetch_item(base_url, args.id)
             print(json.dumps({"id": args.id, "body": item.get("body", []),
@@ -227,9 +251,9 @@ def main(argv: list[str] | None = None) -> int:
                              ensure_ascii=False, indent=2))
             return 0
 
-        if args.body_file is None and args.stage is None:
-            parser.error("one of --show, --body-file, --stage, --new-card, --new-topic, "
-                         "or --docs is required")
+        if args.body_file is None and args.stage is None and args.parent is None:
+            parser.error("one of --show, --body-file, --stage, --parent, --new-card, "
+                         "--new-topic, or --docs is required")
         if args.body_file is not None and not args.body_etag:
             parser.error("--body-etag is required with --body-file")
 
@@ -238,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
             payload.update({"body": _text_from(args.body_file), "bodyEtag": args.body_etag})
         if args.stage is not None:
             payload["stage"] = args.stage
+        if args.parent is not None:
+            payload["parent"] = args.parent.strip()
         print(json.dumps(post(base_url, "/api/gc-body", payload), ensure_ascii=False))
         return 0
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as exc:

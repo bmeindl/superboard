@@ -94,7 +94,7 @@ texts (the full text is at the referenced path under inbox/gc-threads/). The sho
 pointer — read the file if you need details from an earlier turn. Your CURRENT task has already \
 been fully expanded, so you do not need to load anything else.""",
         "full.board_client": """\
-- The board is written by the SERVER alone. Never edit `inbox/board.md`, and never hand-write its markdown — use the board client that sits in this workspace at `.superboard/board_write.py` (plain stdlib, run it with any `python3`). It covers the whole sanctioned write surface: `--id <gc-id> --show` (read a body + its revision), `--id <gc-id> --body-file <path> --body-etag <rev>` (replace THIS item's body), `--id <gc-id> --stage '<stage> · <note> *(date)*'`, `--new-card '<title>' [--topic <topic>] [--col Jetzt|Bald|Geparkt] [--card-body-file <path>] [--ask '<first turn>']` (create a to-do; it never starts a run — the user presses ▶ Agent), `--new-topic '<name>'` (add a board row), and `--docs readme|architecture|changelog` (read the product's own documentation from the running version). Run it with `--help` if unsure. If it fails, report the failure — do not fall back to editing the file.""",
+- The board is written by the SERVER alone. Never edit `inbox/board.md`, and never hand-write its markdown — use the board client that sits in this workspace at `.superboard/board_write.py` (plain stdlib, run it with any `python3`). It covers the whole sanctioned write surface: `--id <gc-id> --show` (read a body + its revision), `--id <gc-id> --body-file <path> --body-etag <rev>` (replace THIS item's body), `--id <gc-id> --stage '<stage> · <note> *(date)*'`, `--new-card '<title>' [--topic <topic>] [--col Now|Next|Backlog] [--card-body-file <path>] [--ask '<first turn>']` (create a to-do; it never starts a run — the user presses ▶ Agent), `--new-topic '<name>'` (add a board row), and `--docs readme|architecture|changelog` (read the product's own documentation from the running version). Run it with `--help` if unsure. If it fails, report the failure — do not fall back to editing the file.""",
         "full.docs": """\
 - Documentation contract: IF this workspace keeps its own README.md / ARCHITEKTUR.md / CHANGELOG.md, a code change with user-visible or architectural impact updates the relevant one in the same pass (README = usage and setup, ARCHITEKTUR = invariants and trust boundaries — temporary facts and one-off context rot there, CHANGELOG = version history). Do not assume those files exist; check first. For Superboard's OWN documentation use `python3 .superboard/board_write.py --docs readme|architecture`.""",
         "full.git": """\
@@ -141,6 +141,7 @@ _FULL_ORDER = (
     "full.final_message",
     "full.short_line",
     "full.item_body",
+    "full.reply_style",
     "full.board_client",
     "full.safe_work",
     "full.todo",
