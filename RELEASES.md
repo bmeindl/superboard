@@ -23,6 +23,12 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
   viewer renders `_emphasis_`, wrapped spans and YAML front matter, the hover toolbar
   of top-row cards no longer flips into the header, done items without any timestamp
   archive again, board-lint reports content-identical duplicate cards.
+- **Check for updates works on the `uvx` install it is documented with.** The card's
+  skill now looks at the process serving the board, updates by a detached restart
+  (`uvx --refresh …`) and rolls back by restarting pinned; verified live 0.1.0 → 0.2.0
+  from inside the card run. Starter skills you never edited now follow the release
+  (edited ones stay yours), an older workspace gets the update card offered once, and
+  `.superboard/` is git-ignored by default so the pre-update snapshot stays clean.
 - Not in this release, on purpose: the reply-suggestion experiment the origin board
   gained on the same evening. It ships when its owner has used it. Build 6.23.0
   (origin stand 2026-09-04, origin Build 6.21.0).

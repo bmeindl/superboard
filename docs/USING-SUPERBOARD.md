@@ -54,8 +54,13 @@ superskills/                           optional separate catalogue checkout
 .superboard/                           runtime journals and disposable caches
 ```
 
-Starter copies are create-only. Starting or upgrading Superboard never replaces
-a file the user already owns.
+Starter copies are yours the moment you edit them: starting or upgrading Superboard
+never replaces a file you changed. A starter skill you never touched follows the
+release you run (`.superboard/starter-stamps.json` remembers what was seeded). The
+shipped **Check for updates** card is added once to an `actions.json` that never had
+it; delete it and it stays gone (the offer is remembered in `.superboard/`, so
+wiping that directory repeats it once). A `.gitignore` for `.superboard/` is seeded when
+the workspace has none.
 
 ## First-run journey
 

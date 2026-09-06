@@ -32,6 +32,10 @@ what a stranger gets now".
 
 - Fresh install from a clean environment using the *built artifact*, not the source
   tree: `scripts/testrig.sh fresh`.
+- Starter skills: if `superboard-skill.md` or `superboard-update-skill.md` changed since
+  the last release, add the sha256 of the text that release shipped to
+  `REFRESHABLE_STARTERS` in `__main__.py` — that hash is how an unstamped older
+  workspace proves its copy is untouched. Hashes are kept forever.
 - Installed smoke: `scripts/smoke-installed.sh`, plus green macOS smoke on the release
   commit.
 - **E2E by hand:** empty workspace → first run → first item → agent reply →

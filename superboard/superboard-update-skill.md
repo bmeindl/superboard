@@ -59,6 +59,11 @@ line, stop.**
   patched the installed package itself. Check that only when something looks odd.
 - Skills: diff the installed `SKILL.md` against its source **at the recorded version**.
   Identical → clean upgrade. Different → a three-way situation; see step 4.
+- Seeded starter skills (`superboard`, `superboard-update`): the server refreshes them
+  on start only while they are untouched. After the restart, diff each against the
+  packaged copy (`<serving python> -c "import superboard, pathlib; print(pathlib.Path(superboard.__file__).parent)"`);
+  a remaining difference means the user edited it — apply the upstream change on top
+  of their edits as in step 4, never overwrite.
 
 ## 3b. Safety net before touching anything
 

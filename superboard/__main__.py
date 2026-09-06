@@ -11,6 +11,7 @@ import argparse
 import importlib.metadata
 import json
 import os
+import hashlib
 import secrets
 import shutil
 import subprocess
@@ -31,6 +32,24 @@ WORKSPACE_STARTER_FILES = {
     # is only a prompt, so the skill it names has to exist in a stranger's workspace
     # on day one. Same create-only rule as every other starter file.
     ".claude/skills/superboard-update/SKILL.md": PKG / "superboard-update-skill.md",
+}
+
+# Starter files are create-only for the USER: once someone edits a seeded skill it is
+# theirs and no upgrade touches it. A copy the user never edited is a different case —
+# leaving it at the old text would mean every workspace keeps the update skill of the
+# release it happened to start on (verified 2026-09-06: seeding was strictly
+# create-only, so a corrected skill never reached existing workspaces). Provenance is
+# a stamp per seeded file (sha256 of what WE wrote, in `.superboard/starter-stamps.json`):
+# workspace content == stamp → untouched → refresh. Workspaces that predate the stamps
+# are covered by the hashes of the texts earlier releases actually shipped.
+STARTER_STAMPS = "starter-stamps.json"
+REFRESHABLE_STARTERS = {
+    ".claude/skills/superboard/SKILL.md": {
+        "240f6ec895e903b18cab36ab21cac3dbb61adc10dcdce257d4305ff4e0e1d80a",  # 0.1.0 and 0.2.0
+    },
+    ".claude/skills/superboard-update/SKILL.md": {
+        "8823d91edf6e0600542df7639fb94c8169be3b3325265c4140a4f5ebd08987b7",  # 0.2.0
+    },
 }
 
 STARTER_HEADER = """# Board
@@ -114,7 +133,16 @@ def _bootstrap(root: Path) -> Path:
             with destination.open("xb") as target:
                 target.write(content)
         except FileExistsError:
-            pass
+            _refresh_untouched_starter(root, relative, destination, content)
+            continue
+        if relative in REFRESHABLE_STARTERS:
+            _stamp(root, relative, content)
+    _offer_default_actions(root)
+    try:
+        with (root / ".gitignore").open("x", encoding="utf-8") as ignore:
+            ignore.write(".superboard/\n")
+    except FileExistsError:
+        pass
     data = Path(os.environ.get("GC_DATA", "").strip() or root / ".superboard")
     (data / "journal").mkdir(parents=True, exist_ok=True)
     # The board client is product mechanics, not user-owned state: it is REFRESHED on
@@ -129,6 +157,107 @@ def _bootstrap(root: Path) -> Path:
     client.parent.mkdir(parents=True, exist_ok=True)
     client.write_bytes((PKG / "board_write.py").read_bytes())
     return board
+
+
+def _stamps_path(root: Path) -> Path:
+    return root / ".superboard" / STARTER_STAMPS
+
+
+def _read_stamps(root: Path) -> dict:
+    try:
+        loaded = json.loads(_stamps_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    # A structurally odd stamps file must never break a start: keep only the shapes
+    # the readers below rely on.
+    files = loaded.get("files")
+    offered = loaded.get("offered_actions")
+    return {
+        "files": {k: v for k, v in files.items() if isinstance(v, str)} if isinstance(files, dict) else {},
+        "offered_actions": [k for k in offered if isinstance(k, str)] if isinstance(offered, list) else [],
+    }
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Sibling temp file + os.replace: a crash mid-write never truncates the target."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _write_stamps(root: Path, stamps: dict) -> None:
+    path = _stamps_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(path, json.dumps(stamps, indent=2, sort_keys=True) + "\n")
+
+
+def _stamp(root: Path, relative: str, content: bytes) -> None:
+    stamps = _read_stamps(root)
+    stamps.setdefault("files", {})[relative] = hashlib.sha256(content).hexdigest()
+    _write_stamps(root, stamps)
+
+
+def _refresh_untouched_starter(root: Path, relative: str, destination: Path, content: bytes) -> None:
+    """Replace a seeded starter only when the workspace copy is provably ours."""
+    if relative not in REFRESHABLE_STARTERS or destination.is_symlink():
+        return  # a symlink points at something that is not our seeded copy
+    try:
+        current = hashlib.sha256(destination.read_bytes()).hexdigest()
+    except OSError:
+        return
+    shipped = hashlib.sha256(content).hexdigest()
+    known = set(REFRESHABLE_STARTERS[relative])
+    stamped = _read_stamps(root).get("files", {}).get(relative)
+    if stamped:
+        known.add(stamped)
+    if current == shipped:
+        if stamped != shipped:
+            _stamp(root, relative, content)
+        return
+    if current not in known:
+        return  # edited by the user: theirs, untouched
+    _write_atomic(destination, content.decode("utf-8"))
+    _stamp(root, relative, content)
+    print(f"superboard: refreshed {relative} (untouched starter, new release text)", flush=True)
+
+
+def _offer_default_actions(root: Path) -> None:
+    """Add a shipped Cockpit card ONCE to an actions.json that never had it.
+
+    `actions.json` is user-owned, so the rule is narrow: a default key is appended when
+    it is absent AND this workspace was never offered it (`.superboard/starter-stamps.json`
+    remembers every offer). A card the user deleted therefore stays deleted for as long
+    as that stamps file exists. Existing entries keep their order and content; the file
+    is re-serialised canonically (2-space JSON, UTF-8), written atomically. An
+    unparsable file is left alone."""
+    try:
+        defaults = json.loads((PKG / "actions.json").read_text(encoding="utf-8")).get("actions", [])
+    except (OSError, ValueError):
+        return
+    default_keys = [a.get("key") for a in defaults if isinstance(a, dict) and a.get("key")]
+    stamps = _read_stamps(root)
+    offered = set(stamps.get("offered_actions", []))
+    missing_offers = [k for k in default_keys if k not in offered]
+    if not missing_offers:
+        return
+    path = root / "actions.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    entries = data.get("actions") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return
+    present = {a.get("key") for a in entries if isinstance(a, dict)}
+    added = [a for a in defaults if a.get("key") in missing_offers and a.get("key") not in present]
+    if added:
+        entries.extend(added)
+        _write_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        print("superboard: added shipped Cockpit card(s) " + ", ".join(a["key"] for a in added), flush=True)
+    stamps["offered_actions"] = sorted(offered | set(default_keys))
+    _write_stamps(root, stamps)
 
 
 def _workspace_from_args(workspace: str | None) -> tuple[Path, bool]:

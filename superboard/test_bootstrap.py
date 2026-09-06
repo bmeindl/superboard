@@ -243,3 +243,125 @@ def test_fresh_workspace_never_auto_spends_tokens(tmp_path: Path, monkeypatch) -
     assert server._workspace_ever_ran_an_agent(board) is False
     (board.parent / "gc-threads" / "abc123-20260822-190000-0000.md").write_text("x")
     assert server._workspace_ever_ran_an_agent(board) is True
+
+
+def _hash(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_untouched_starter_skill_is_refreshed_but_an_edited_one_is_kept(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    relative = ".claude/skills/superboard-update/SKILL.md"
+    cli._bootstrap(tmp_path)
+    seeded = tmp_path / relative
+    stamps = json.loads((tmp_path / ".superboard" / "starter-stamps.json").read_text())
+    assert stamps["files"][relative] == _hash(seeded)
+
+    # A new release ships a different text: the untouched copy follows it.
+    newer = tmp_path / "newer-skill.md"
+    newer.write_text("---\nname: superboard-update\n---\nnewer text\n", encoding="utf-8")
+    monkeypatch.setitem(cli.WORKSPACE_STARTER_FILES, relative, newer)
+    cli._bootstrap(tmp_path)
+    assert seeded.read_text(encoding="utf-8") == newer.read_text(encoding="utf-8")
+
+    # The user edits it: from now on it is theirs, whatever we ship.
+    seeded.write_text(seeded.read_text(encoding="utf-8") + "\nmy note\n", encoding="utf-8")
+    newest = tmp_path / "newest-skill.md"
+    newest.write_text("---\nname: superboard-update\n---\nnewest text\n", encoding="utf-8")
+    monkeypatch.setitem(cli.WORKSPACE_STARTER_FILES, relative, newest)
+    cli._bootstrap(tmp_path)
+    assert seeded.read_text(encoding="utf-8").endswith("my note\n")
+
+
+def test_starter_skill_from_an_earlier_release_is_refreshed_without_a_stamp(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Workspaces from 0.1.0/0.2.0 have no stamps; the shipped texts are known by hash."""
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    relative = ".claude/skills/superboard-update/SKILL.md"
+    known = next(iter(cli.REFRESHABLE_STARTERS[relative]))
+    # Stand in for the 0.2.0 text: the table must name its real hash, not this stub's.
+    old = tmp_path / relative
+    old.parent.mkdir(parents=True)
+    old.write_text("old release text\n", encoding="utf-8")
+    monkeypatch.setitem(cli.REFRESHABLE_STARTERS, relative, {_hash(old), known})
+    cli._bootstrap(tmp_path)
+    assert old.read_text(encoding="utf-8") == (HERE / "superboard-update-skill.md").read_text(encoding="utf-8")
+
+
+def test_shipped_cockpit_card_is_offered_once_to_an_older_workspace(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    actions = tmp_path / "actions.json"
+    mine = {"key": "mine", "label": "Mine", "icon": "x", "auth": False, "group": "g", "prompt": "p"}
+    actions.write_text(json.dumps({"_comment": "kept", "actions": [mine]}), encoding="utf-8")
+
+    cli._bootstrap(tmp_path)
+    data = json.loads(actions.read_text(encoding="utf-8"))
+    assert data["_comment"] == "kept"
+    assert [a["key"] for a in data["actions"]] == ["mine", "superboard-update"]
+
+    # Deleted on purpose: the offer is not repeated.
+    data["actions"] = [mine]
+    actions.write_text(json.dumps(data), encoding="utf-8")
+    cli._bootstrap(tmp_path)
+    assert [a["key"] for a in json.loads(actions.read_text(encoding="utf-8"))["actions"]] == ["mine"]
+
+
+def test_unparsable_actions_file_is_left_alone(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    actions = tmp_path / "actions.json"
+    actions.write_text("{not json", encoding="utf-8")
+    cli._bootstrap(tmp_path)
+    assert actions.read_text(encoding="utf-8") == "{not json"
+
+
+def test_gitignore_is_seeded_create_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    cli._bootstrap(tmp_path)
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == ".superboard/\n"
+    (tmp_path / ".gitignore").write_text("mine\n", encoding="utf-8")
+    cli._bootstrap(tmp_path)
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "mine\n"
+
+
+def test_symlinked_starter_is_never_refreshed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    relative = ".claude/skills/superboard-update/SKILL.md"
+    known = next(iter(cli.REFRESHABLE_STARTERS[relative]))
+    target = tmp_path / "elsewhere.md"
+    target.write_text("old release text\n", encoding="utf-8")
+    link = tmp_path / relative
+    link.parent.mkdir(parents=True)
+    link.symlink_to(target)
+    monkeypatch.setitem(cli.REFRESHABLE_STARTERS, relative, {_hash(target), known})
+    cli._bootstrap(tmp_path)
+    assert target.read_text(encoding="utf-8") == "old release text\n"
+
+
+def test_odd_stamps_file_does_not_break_bootstrap(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GC_BOARD", raising=False)
+    monkeypatch.delenv("GC_DATA", raising=False)
+    cli = _cli_module()
+    stamps = tmp_path / ".superboard" / "starter-stamps.json"
+    stamps.parent.mkdir(parents=True)
+    stamps.write_text('{"files": [], "offered_actions": null}', encoding="utf-8")
+    cli._bootstrap(tmp_path)
+    data = json.loads(stamps.read_text(encoding="utf-8"))
+    assert isinstance(data["files"], dict) and "superboard-update" in data["offered_actions"]
