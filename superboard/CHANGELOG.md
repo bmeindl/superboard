@@ -6,6 +6,17 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.24.2] — 2026-10-02
+- fix(onboarding): client targets its own board; review fixes
+  - The workspace client finds its own board: each start writes `.superboard/board-url`,
+    and `board_write.py` uses it when `GC_BOARD_URL` is unset. Before, a client run
+    outside an agent run always wrote to port 47822, even from a board on another port.
+  - The mascot's inflow (STUFFED) ignores Getting started too.
+  - Getting started is matched case- and space-insensitively in the header meters too.
+  - Card 3 treats existing files as context, not as proof the setup is done.
+  - README install steps reordered (start the board before adding tasks), with the
+    files Superboard adds, `--port`, process lifetime and the exact reopen command.
+
 ## [6.24.1] — 2026-10-02
 - feat(onboarding): real work first, eight setup cards, installer-led setup
   - Fresh boards list My to-dos above Getting started; Getting started shrinks from 14 to 8

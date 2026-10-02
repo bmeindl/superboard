@@ -51,6 +51,20 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_URL = "http://127.0.0.1:47822"
+
+
+def _default_url() -> str:
+    """GC_BOARD_URL (set for agent runs), else the URL the workspace's own server
+    recorded next to this client at start, else the standard port. The recorded URL
+    keeps a second board on another port from silently receiving this workspace's cards."""
+    env = os.environ.get("GC_BOARD_URL", "").strip()
+    if env:
+        return env
+    try:
+        recorded = (Path(__file__).resolve().parent / "board-url").read_text(encoding="utf-8").strip()
+    except OSError:
+        recorded = ""
+    return recorded or DEFAULT_URL
 COLUMNS = ("Jetzt", "Bald", "Geparkt")
 
 # The public column names are English; the internal keys (and therefore the dict keys
@@ -190,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--id", help="immutable @gc-id of the target item")
-    parser.add_argument("--url", default=os.environ.get("GC_BOARD_URL", DEFAULT_URL),
+    parser.add_argument("--url", default=_default_url(),
                         help="board server base URL (default: %(default)s)")
     parser.add_argument("--show", action="store_true",
                         help="print the current body and bodyEtag; do not write")

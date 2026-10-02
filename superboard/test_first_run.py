@@ -221,7 +221,7 @@ def test_later_setups_are_offered_not_carded_and_now_stays_small() -> None:
 def test_workspace_and_agent_setup_are_separate_concrete_outcomes() -> None:
     missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
     setup = missions["3 · Set up this workspace"]
-    assert "do not repeat the setup conversation" in setup
+    assert "do not repeat a setup conversation" in setup
     assert "context/README.md" in setup and "2–5 board topics" in setup
     assert "does not move its cards, threads or spend history" in setup
     agent = missions["5 · Find settings and get help"]
@@ -347,4 +347,25 @@ def test_getting_started_is_setup_not_load() -> None:
     source = (HERE / "server.py").read_text(encoding="utf-8")
     assert 'named.get("inbox") or named.get("my to-dos")' in source
     html = (HERE / "index.html").read_text(encoding="utf-8")
-    assert '!inHeadScope(t) || t.name === "Getting started"' in html
+    assert '!inHeadScope(t) || t.name.trim().toLowerCase() === "getting started"' in html
+    assert server._is_onboarding_theme("  getting STARTED ")
+
+
+def test_workspace_client_targets_its_own_board(tmp_path, monkeypatch) -> None:
+    """A second board on another port must not receive this workspace's cards."""
+    import importlib.util
+
+    client = tmp_path / ".superboard" / "board_write.py"
+    client.parent.mkdir(parents=True)
+    client.write_bytes((HERE / "board_write.py").read_bytes())
+    spec = importlib.util.spec_from_file_location("ws_board_write", client)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.delenv("GC_BOARD_URL", raising=False)
+    assert module._default_url() == "http://127.0.0.1:47822"
+    (client.parent / "board-url").write_text("http://127.0.0.1:47883\n", encoding="utf-8")
+    assert module._default_url() == "http://127.0.0.1:47883"
+    monkeypatch.setenv("GC_BOARD_URL", "http://127.0.0.1:47999")
+    assert module._default_url() == "http://127.0.0.1:47999"
+    source = (HERE / "__main__.py").read_text(encoding="utf-8")
+    assert '".superboard" / "board-url"' in source

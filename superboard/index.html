@@ -3342,7 +3342,7 @@ function renderGcHead() {
   let neu = 0, jetzt = 0, jetztOld = 0, overCap = 0;
   board.themes.forEach(t => {
     // The first-run checklist is setup, not work: keep it out of NEW/NOW and the cap.
-    if (!inHeadScope(t) || t.name === "Getting started") return;
+    if (!inHeadScope(t) || t.name.trim().toLowerCase() === "getting started") return;
     let tJetzt = 0;
     themeCols(t).forEach(c => t.cols[c].forEach(it => {
       if (it.done) return;
@@ -4110,7 +4110,7 @@ function cardScreenBar(loc, it) {
   }
   return bar;
 }
-const APP_VERSION = "2026-10-02b";
+const APP_VERSION = "2026-10-02c";
 function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function mdUrl(u) {
   const t = u.trim();

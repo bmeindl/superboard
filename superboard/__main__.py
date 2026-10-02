@@ -350,6 +350,9 @@ def run() -> None:
     _print_preflight(root, fresh=not selected_board.exists())
 
     board = _bootstrap(root)
+    # The workspace client reads this to find THIS board: without it a second board on
+    # another port would receive the cards (board_write.py defaults to 47822).
+    (root / ".superboard" / "board-url").write_text(f"http://127.0.0.1:{args.port}\n", encoding="utf-8")
     import server
     server.serve(args.port, board)
 

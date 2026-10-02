@@ -49,7 +49,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.24.1"
+VERSION = "6.24.2"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -3631,7 +3631,8 @@ def _wesen_core(board: dict, today: date, archive: Path | None = None,
     # Velocity hat einen WEITEREN Scope als die Last-Beine: Dev (Work) ist echte Arbeit
     # und zählt auf BEIDEN Seiten mit (nur Board/Tools sind Zuckerwerk) — sonst entstünde
     # dieselbe Asymmetrie nochmal, nur andersherum.
-    velo_items = [it for t in board["themes"] if not _is_sugar_theme(t["name"])
+    velo_items = [it for t in board["themes"]
+                  if not _is_sugar_theme(t["name"]) and not _is_onboarding_theme(t["name"])
                   for col in t["cols"].values() for it in col]
     inflow = sum(1 for it in velo_items if not it["done"] and (it.get("date") or "") >= iso7)
     # Abfluss ROLLEND über dieselben 7 Tage wie der Zufluss. Vorher stand hier

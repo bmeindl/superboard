@@ -59,7 +59,9 @@ facts out of this file is what keeps it worth reading.
   Its workspace path stays `.superboard/board_write.py` even when `GC_DATA`
   redirects journals and caches elsewhere. Every spawned runner receives the
   active server URL as `GC_BOARD_URL`, so the same command works on `--port`
-  overrides instead of silently falling back to 47822.
+  overrides instead of silently falling back to 47822. Outside a run (an
+  installing agent, a user's shell) the client reads `.superboard/board-url`,
+  which every start writes next to it; only without both does it use 47822.
 - `board_ls.py` — quick agent-facing overview of board contents.
 - `paths.py` / `config.py` — the one place that resolves where the board's
   data lives and what is instance configuration versus mechanic.
