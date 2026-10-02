@@ -80,7 +80,8 @@ a time, previewed first, and then customized locally.
 - Python 3.10+ and `uv`/`uvx`. The release gates cover macOS and Ubuntu; Windows
   has not been verified and is not supported in this alpha.
 - Claude Code installed and authenticated for the supported default runner.
-- Codex is an experimental macOS runner and uses the CLI bundled with ChatGPT.
+- Codex is an experimental macOS runner. It uses the CLI bundled with the ChatGPT app
+  (old and new app locations), else a `codex` on your `PATH`; `GC_RUNNER_CODEX` overrides.
   OpenCode is not yet a supported runner.
 - Provider usage: Superboard does not include model access or tokens.
 
