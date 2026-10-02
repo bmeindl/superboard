@@ -4571,7 +4571,7 @@ class Handler(BaseHTTPRequestHandler):
     def _ritual_done(self, payload: dict) -> None:
         """Ritual abhaken (Füttern): Proof-Pflichtfeld + Journal-Append; bei
         `persist_personal` zusätzlich append-only in die Ziel-Datei (NIE überschreiben —
-        die Datei existiert bereits, z.B. die Therapie-Ablage der Reflection).
+        die Datei existiert bereits, z.B. eine bestehende Notiz-Datei).
         proof-kind "none": Server kanonisiert den Proof-Text selbst statt
         dem Client zu vertrauen — ein Client kann so weder beliebigen Text einschleusen noch
         von der Konstante abweichen. Zusätzlich idempotent: ein zweites done im selben Zyklus
