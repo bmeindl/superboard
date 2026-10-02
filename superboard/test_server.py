@@ -4715,7 +4715,7 @@ RITUALE_FIXTURE = {
 
 def _ritual_env(tmp_path: Path, persist: Path | None = None):
     """rituale.json + Journal-Pfad in einen Temp-Ordner umbiegen — nie gegen die echten
-    Dateien testen (Journal UND persist_personal, die Therapie-Ablage ist tabu)."""
+    Dateien testen (Journal UND persist_personal, bestehende Ziel-Dateien sind tabu)."""
     cfg = json.loads(json.dumps(RITUALE_FIXTURE))
     if persist is not None:
         cfg["rituale"]["reflection"]["persist_personal"] = str(persist)
