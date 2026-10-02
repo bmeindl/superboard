@@ -64,28 +64,33 @@ the workspace has none.
 
 ## First-run journey
 
-A fresh browser opens the normal To-dos view with separate Getting started and
-My to-dos categories. Getting started has fourteen numbered cards; My to-dos is
-empty and ready for ordinary work. Each onboarding title names the outcome; there is no generic
-"optional setup" gate hiding several unrelated jobs:
+A fresh browser opens the normal To-dos view. My to-dos sits on top, empty or holding
+the few tasks the installing agent brought in with the user's OK; Getting started sits
+below it with eight numbered cards. Getting started never counts toward the NEW/NOW
+meters, the 'Now' limit or the board's load, and a card added without a topic lands in
+My to-dos, never in the checklist. Each onboarding title names the outcome:
 
 | Now | Next | Backlog |
 | --- | --- | --- |
-| 1 · Start here · Meet Superboard | 8 · Set up an email digest | 14 · Finish Getting started |
-| 2 · Set up this workspace | 9 · Set up one routine | |
-| 3 · Add your first real to-do | 10 · Set up an off-duty view | |
-| 4 · Understand runs, threads and cache | 11 · Turn on night rest | |
-| 5 · Find settings and get help | 12 · Let Superboard learn from your threads | |
-| 6 · Check your agent and model setup | 13 · Get more from Superboard | |
-| 7 · Set up your Cockpit | | |
+| 1 · Start here · Meet Superboard | 4 · Understand runs, threads and cache | 8 · Finish Getting started |
+| 2 · Hand off your first real task | 5 · Find settings and get help | |
+| 3 · Set up this workspace | 6 · Set up your Cockpit | |
+| | 7 · Get more from Superboard | |
+
+The first session is shaped by the installing agent (README, "For your agent"): it
+fits the board into an existing workspace or a small new one and may add up to three
+accepted tasks to My to-dos. Card 2 then either picks one of those or asks for one real
+task, and shows the first hand-off. Card 3 only matters when the installer did not
+already set the workspace up; otherwise it summarizes what exists and closes.
 
 Opening a card spends no model tokens. Card 1 asks the user to press `▶ Agent` once;
 that round opens the same-origin introduction at `/welcome` and keeps follow-up
 questions in the card. Card 4 explains runs, threads, new sessions and cache using its
 own task as the example and links the illustrated version at
-`/onboarding-showcase#threads`. Card 13 is optional inspiration: it opens
+`/onboarding-showcase#threads`. Card 7 is optional inspiration: it opens
 `/inspiration`, which explains what the Cockpit is and shows four things people rarely
-think to ask for. `✓ Done` completes a card; the checkbox remains available for immediate undo
+think to ask for, and lists setups to request later in any card (email digest, one
+routine, an off-duty view, night rest, learning from threads after a few days). `✓ Done` completes a card; the checkbox remains available for immediate undo
 until reload. Setup cards are guidance, not gates, except that the final cleanup
 card requires the other cards to be completed or consciously skipped. It then
 archives their cards and threads before removing the topic.

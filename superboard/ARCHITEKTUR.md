@@ -105,17 +105,19 @@ mechanics and generic starter sources, but it must not replace the user's board,
 actions, rituals, configuration, contract, or skills.
 
 First-run onboarding is data on that same boundary, not a separate state machine.
-Only a missing `board.md` produces two neutral topics: a seeded Getting started
-checklist and an empty My to-dos area that makes ordinary work visible from frame one.
+Only a missing `board.md` produces two neutral topics: an empty My to-dos area on top,
+so ordinary work is the first thing visible, and a finite Getting started checklist
+below it. Getting started is setup, not work: it is excluded from load, inflow, the
+'Now' limit and the header meters (`_is_onboarding_theme`), and a capture without an
+explicit topic is never filed into it.
 Each onboarding card has its own id and one pending user turn. The first prepared
 round opens the same-origin introduction; the UI itself injects no card-specific
-tour button. Runs, threads and cache are taught as a concrete agent-led to-do in
-plain language. The sequence then establishes the workspace boundary/context,
-creates one genuine normal card, explains settings/help, confirms the already-working agent/model profile, configures an explicit Off Duty
-projection and reveals the Cockpit payoff. Email digest, one routine and later
-thread-learning remain separate ordinary cards: optionality is expressed by completing
-or consciously skipping a concrete outcome, not by a generic chooser that creates more
-cards. The Backlog closer can finish only when the other cards are done;
+tour button. Card 2 creates or picks one genuine normal card and explains the hand-off;
+it never starts that run itself. First-session adaptation of the workspace belongs to
+the installing agent (README "For your agent"); card 3 repeats it only when it did not
+happen. Further setups (email digest, routine, Off Duty, night rest, thread learning)
+are offered as things to ask for, not seeded as cards, so the checklist stays at eight.
+The Backlog closer can finish only when the other cards are done;
 its normal Done path first closes the thread, then
 atomically archives the topic's item blocks and moves their sidecars before removing the
 Getting started topic. The packaged action and

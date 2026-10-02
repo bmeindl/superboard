@@ -6,6 +6,21 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.24.1] — 2026-10-02
+- feat(onboarding): real work first, eight setup cards, installer-led setup
+  - Fresh boards list My to-dos above Getting started; Getting started shrinks from 14 to 8
+    cards (3 in Now). Email digest, routine, Off Duty, night rest and thread learning
+    become things to ask for, listed by card 7, instead of cards of their own.
+  - Card 2 is now "Hand off your first real task": it picks a task the installer already
+    added or asks for one, explains permissions and usage, and leaves ▶ Agent to the user.
+    Card 3 (workspace setup) closes quickly when the installer already did it.
+  - Getting started no longer counts toward NEW/NOW, the 'Now' limit, inflow or load, so
+    a fresh board no longer opens "over limit" and STUFFED.
+  - A capture without a topic lands in Inbox, then My to-dos, never in Getting started
+    (before: the first topic, which on a fresh board was the checklist).
+  - README: new "For your agent" install guidance — pick the home together, fit into an
+    existing workspace, bring at most three accepted tasks, open the board and stop.
+
 ## [6.24.0] — 2026-10-02
 - feat(board): clearer threads and reliable agent handoffs
   - Ports generic origin fixes up to origin Build 6.37.7: turn provenance, background-job

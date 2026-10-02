@@ -51,36 +51,31 @@ def test_starter_is_a_pending_setup_checklist() -> None:
     ids = [f"{n:012x}" for n in range(len(cli.STARTER_ITEMS))]
     text = cli._starter_board(date(2026, 8, 22), ids)
 
-    # Onboarding stays visibly separate from the empty home for normal work.
+    # Real work comes first: My to-dos sits above the separate setup checklist, so a
+    # card the installing agent imports is the first thing the user sees.
     assert re.findall(r"^## (.+)$", text, re.MULTILINE) == [
-        "Getting started",
         "My to-dos",
+        "Getting started",
     ]
     titles = re.findall(r"^- \[ \] (.+?) \*\(2026-08-22\)\*$", text, re.MULTILINE)
     assert titles == [
         "**1 · Start here · Meet Superboard**",
-        "2 · Set up this workspace",
-        "3 · Add your first real to-do",
+        "2 · Hand off your first real task",
+        "3 · Set up this workspace",
         "4 · Understand runs, threads and cache",
         "5 · Find settings and get help",
-        "6 · Check your agent and model setup",
-        "7 · Set up your Cockpit",
-        "8 · Set up an email digest",
-        "9 · Set up one routine",
-        "10 · Set up an off-duty view",
-        "11 · Turn on night rest",
-        "12 · Let Superboard learn from your threads",
-        "13 · Get more from Superboard",
-        "14 · Finish Getting started",
+        "6 · Set up your Cockpit",
+        "7 · Get more from Superboard",
+        "8 · Finish Getting started",
     ]
-    # Core orientation and Cockpit payoff stay in Now; optional setup waits in Next.
-    onboarding = text.split("## My to-dos", 1)[0]
+    # Three cards in Now (meet, hand off, optional workspace check); the rest waits.
+    onboarding = text.split("## Getting started", 1)[1].split("# To discuss", 1)[0]
     now = onboarding.split("### Next", 1)[0]
     next_ = onboarding.split("### Next", 1)[1].split("### Backlog", 1)[0]
     backlog = onboarding.split("### Backlog", 1)[1]
-    assert now.count("\n- [ ] ") == 7 and next_.count("\n- [ ] ") == 6
+    assert now.count("\n- [ ] ") == 3 and next_.count("\n- [ ] ") == 4
     assert backlog.count("\n- [ ] ") == 1
-    normal = text.split("## My to-dos", 1)[1].split("# To discuss", 1)[0]
+    normal = text.split("## My to-dos", 1)[1].split("## Getting started", 1)[0]
     assert normal.count("\n- [ ] ") == 0
     assert "### Jetzt" not in text and "### Bald" not in text and "### Geparkt" not in text
     assert "# To discuss" in text and "# Notes" in text
@@ -95,7 +90,7 @@ def test_starter_is_a_pending_setup_checklist() -> None:
 
     compact = " ".join(text.split())
     assert "I opened your Superboard introduction" in compact
-    assert "one real current to-do" in compact
+    assert "one real, current task" in compact
     assert "My to-dos" in compact
     assert "prompt cache is only an efficiency" in compact
     assert "There is no settings maze" in compact
@@ -103,8 +98,7 @@ def test_starter_is_a_pending_setup_checklist() -> None:
     assert "off_duty.hidden_topics" in compact
     assert "FIRST ensure exactly one follow-up card" in compact
     assert "platform and run profile" in compact
-    assert "one real digest" in compact
-    assert "rituals.json intentionally starts empty" in compact
+    assert "email digest" in compact and "rituals.json starts empty" in compact
     assert "night_pause" in compact and "enabled" in compact
     assert "archives the onboarding cards" in compact
 

@@ -62,10 +62,6 @@ STARTER_HEADER = """# Board
        a body line of only "···" splits short text from the deep dive
      "# To discuss" = per-person discussion lists - "# Notes" = free notes -->
 
-## Getting started
-"""
-
-STARTER_FOOTER = """
 ## My to-dos
 
 ### Now
@@ -74,6 +70,10 @@ STARTER_FOOTER = """
 
 ### Backlog
 
+## Getting started
+"""
+
+STARTER_FOOTER = """
 # To discuss
 
 # Notes
