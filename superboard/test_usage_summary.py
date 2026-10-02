@@ -81,3 +81,12 @@ def test_envelope_liest_hauptmodell_aus_dem_init_ereignis():
     env, sid, haupt = g._envelope(strom)
     assert (sid, haupt) == ("abc", "claude-opus-5")
     assert env is not None and env["type"] == "result"
+
+
+def test_answer_model_nennt_das_wirklich_gelaufene_modell():
+    """Faden cf2357146820: die Faden-Zeile zeigt das Runtime-Modell, nicht den Alias."""
+    assert g.answer_model({"usage_summary": g._usage_summary(ENV, "claude-opus-5-5")}) == "claude-opus-5-5"
+    assert g.answer_model({"usage_summary": {"models": ["codex:gpt-6-astra"]}}) == "gpt-6-astra"
+    assert g.answer_model({"usage_summary": {"models": ["codex:default"]}}) == ""
+    assert g.answer_model({"usage_summary": {}}) == ""
+    assert g.answer_model({}) == ""

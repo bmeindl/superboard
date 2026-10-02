@@ -184,7 +184,7 @@ def extract_refs(title: str, body: list[str]) -> list[dict]:
         for m in QUALIFIED_GH_RE.finditer(stripped):
             repo = m.group(1)
             if "/" not in repo:
-                repo = f"{GH_ORG}/{repo}"
+                continue  # An unqualified repository needs an explicit configured owner.
             add("gh", repo, m.group(2), "qualified")
         stripped = QUALIFIED_GH_RE.sub(" ", stripped)
 

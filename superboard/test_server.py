@@ -19,8 +19,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+
+os.environ.setdefault("SUGGEST_ENABLED", "0")
 
 import board_lint
 import gc_runner
@@ -76,6 +79,40 @@ def check(name: str, cond: bool) -> None:
     print(("  OK  " if cond else " FAIL ") + name)
     if not cond:
         FAILS.append(name)
+
+
+def _turns(board_path: Path, addr: dict) -> list[dict]:
+    """Read an item's parsed turns, including provenance on newly written turns."""
+    item = server.find_item(server.parse_board(board_path.read_text()), addr)[0]
+    return item.get("thread", [])
+
+
+def _has_turn(board_path: Path, addr: dict, kind: str, text: str,
+              author: str | None = None) -> bool:
+    return any(
+        event.get("kind") == kind
+        and event.get("text") == text
+        and (author is None or event.get("author") == author)
+        and (author is None or bool(event.get("turn_id")))
+        for event in _turns(board_path, addr)
+    )
+
+
+def _count_turns(board_path: Path, addr: dict, kind: str, text: str) -> int:
+    return sum(event.get("kind") == kind and event.get("text") == text
+               for event in _turns(board_path, addr))
+
+
+def _count_all_turns(board_path: Path, kind: str, text: str,
+                     author: str | None = None) -> int:
+    board = server.parse_board(board_path.read_text())
+    return sum(
+        event.get("kind") == kind and event.get("text") == text
+        and (author is None or event.get("author") == author)
+        and (author is None or bool(event.get("turn_id")))
+        for _scope, _name, _col, item in server._all_items(board)
+        for event in item.get("thread", [])
+    )
 
 
 REAL_BOARD = Path(__file__).resolve().parents[2] / "inbox" / "board.md"
@@ -227,6 +264,28 @@ def test_body_write_command_reaches_fresh_and_resume_prompts() -> None:
         check(f"stage prompt {runner}: keeps the durable plan requirement",
               "@stage: plan · <plan-path>" in runner_hint)
 
+    legacy = next(it for _scope, _name, _col, it in server._all_items(board)
+                  if it["title"] == "Beantwortet")
+    legacy_prompt = gc_runner.build_prompt(
+        server.pending_entry("theme", "Dev", "Jetzt", legacy, board), resume=False)
+    check("prompt provenance: Legacy-Ask bleibt unverified",
+          "[Author unverified] frage" in legacy_prompt)
+    check("prompt provenance: Legacy-Reply wird als AI beschriftet",
+          "[AI] antwort" in legacy_prompt)
+
+    independent = {
+        **legacy,
+        "thread": [
+            {"kind": "ask", "text": "agent brief", "author": "agent", "turn_id": "a" * 32},
+            {"kind": "reply", "text": "human response", "author": "human", "turn_id": "b" * 32},
+        ],
+    }
+    independent_prompt = gc_runner.build_prompt(
+        server.pending_entry("theme", "Dev", "Jetzt", independent, board), resume=False)
+    check("prompt provenance: Autor ist unabhängig von der Richtung",
+          "[AI] agent brief" in independent_prompt
+          and f"[{gc_runner._cfg.OWNER}] human response" in independent_prompt)
+
 
 def test_stale_client_save_cannot_drop_server_items() -> None:
     """Ein Tab mit altem Stand koennte per Whole-Board-Save (409-Retry mit frischem etag)
@@ -300,10 +359,8 @@ def test_contract_split_byte_stable() -> None:
     # INTERNAL dict keys and would have been rejected by the client (-2 bytes). The port
     # also adds `full.reply_style` to `_FULL_ORDER`, but the block text lives in an
     # instance `board.contract.md`; a shipped Superboard has none, so it renders nothing.
-    snapshots = {
-        "full": (5741, "25c8b042e72763912f09486d12df89959a2e5686dc0083db20736219ba9a88ff"),
-        "reminder": (1364, "9e44a266f5808cf0b119549680078559c2b1a6e23f1acf32769451620d0c3027"),
-    }
+    # 0.4.0 adds runner/model attribution, native delegation and no-background-wait rules.
+    snapshots = {'full': (7514, '598442c04a639bed83c1305ec64f590064fa8b16f19d84994e5f5e6aa78b74af'), 'reminder': (2558, '19ad26f4feab3a08d6c699cbe90aaad644606dc640b9e1b84aa615701e85af44')}
     for kind, (length, digest) in snapshots.items():
         rendered = contract.render(kind)
         check(f"contract {kind}: Länge wie Phase 2", len(rendered) == length)
@@ -739,8 +796,29 @@ def test_receipt_fakten_und_retention() -> None:
             receipt.ENABLED = True
 
 
+def test_receipt_claim_check() -> None:
+    """Claim-Check (Item 968b9c019491, 22.09.): der Runner macht sichtbar, ob eine Antwort
+    starke Behauptungen („verified", „works", „root cause") ohne Beleg-Marker trägt.
+    Kein Gate, kein Prompt-Text — nur eine zählbare Receipt-Zeile."""
+    check("claim: keine Behauptung → keine Zeile",
+          receipt.claim_check("Frage an dich: welches Modell?") is None)
+    unbacked = receipt.claim_check("Fix verified live, all tests passed.")
+    check("claim: Behauptung ohne Marker ist markiert",
+          unbacked is not None and "evidence marker: none" in unbacked and "verified" in unbacked)
+    backed = receipt.claim_check("Root cause found. `measured`: 6 launches.\n"
+                                 "Pre-challenge: frame; held; nothing changed")
+    check("claim: Pre-challenge-Zeile und Label zählen als Beleg",
+          backed is not None and "marker: none" not in backed
+          and "present" in backed and "labels: 1" in backed)
+    check("claim: kaputte Eingabe wirft nicht", receipt.claim_check(None) is None)
+    out = {"ok": True, "reply": "Deployed and works now.", "usage_summary": {}}
+    with tempfile.TemporaryDirectory() as td:
+        txt = receipt.write("ffffffffffff", "X", out, "", time.time(), Path(td)).read_text()
+        check("claim: Zeile steht im Receipt", "**Claim check:**" in txt and "marker: none" in txt)
+
+
 def test_receipt_dateien_vollstaendig_und_zugeordnet() -> None:
-    """Bens Beschwerde 2026-07-23: „nicht alle angefassten Dateien drin, nur die ersten
+    """the owner’s Beschwerde 2026-07-23: „nicht alle angefassten Dateien drin, nur die ersten
     paar und dann ist das abgeschnitten." Zwei Fehler in einem: die Liste war auf 6
     gekappt UND zeigte den ganzen Repo-Dreck (70+ Dateien paralleler Sessions), nicht die
     Dateien DIESES Runs. Fix: snapshot() merkt sich den Vorher-Stand, das Receipt listet
@@ -864,7 +942,8 @@ def test_kopfzeile_zeigt_cache_tokens() -> None:
     dann, wenn der usage-Block keine Zahlen hergab."""
     warm = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "gc_id": "aaaaaaaaaaaa", "title": "Warm",
             "model": "opus", "ok": True, "input_tokens": 62, "cache_read": 2_620_021,
-            "cache_creation": 109_053, "cost_usd": 1.23, "duration_ms": 1000}
+            "cache_creation": 109_053, "cache_hit_pct": 96,
+            "cost_usd": 1.23, "duration_ms": 1000}
     codex = {**warm, "gc_id": "bbbbbbbbbbbb", "title": "Codex", "model": "codex",
              "input_tokens": None, "cache_read": None, "cache_creation": None,
              "cost_usd": None, "duration_ms": None}
@@ -874,6 +953,8 @@ def test_kopfzeile_zeigt_cache_tokens() -> None:
         rows = {r["title"]: r for r in server.finished_recent()}
         check("kopfzeile: cache_read zaehlt in die Token-Zahl",
               rows["Warm"]["tok"] == 62 + 2_620_021 + 109_053)
+        check("kopfzeile: Cache-Quote kommt aus dem Usage-Log mit",
+              rows["Warm"]["cache_hit"] == 96)
         check("kopfzeile: Runs ohne Zahlen tragen None statt 0",
               rows["Codex"]["tok"] is None)
     finally:
@@ -1082,7 +1163,9 @@ def test_gc_append_hardening() -> None:
         code, r = _post(port, "/api/gc-append",
                         {"kind": "reply", "text": "antwort vom agenten", "addr": {"id": "aaaaaaaaaaaa"}})
         check("append: per id → 200 + ok", code == 200 and r.get("ok") and r.get("id") == "aaaaaaaaaaaa")
-        check("append: @gc-re in Datei", "@gc-re: antwort vom agenten" in Path(tmp).read_text())
+        check("append: @gc-re in Datei", any(e["kind"] == "reply" and e["text"] == "antwort vom agenten"
+                  for _, _, _, it in server._all_items(server.parse_board(Path(tmp).read_text()))
+                  for e in it["thread"]))
 
         # Item OHNE id ('Beantwortet', per Fingerprint): Append vergibt eine id
         code, r = _post(port, "/api/gc-append",
@@ -1132,7 +1215,9 @@ def test_gc_append_sys_turn() -> None:
                         {"kind": "sys", "text": "📡 Radar · !343 · blockiert, nicht haengend",
                          "addr": {"id": "aaaaaaaaaaaa"}})
         check("append sys: → 200", code == 200 and r.get("ok"))
-        check("append sys: @gc-sys: in der Datei", "@gc-sys: 📡 Radar" in Path(tmp).read_text())
+        check("append sys: Turn mit System-Provenienz in der Datei",
+              _has_turn(Path(tmp), {"id": "aaaaaaaaaaaa"}, "sys",
+                        "📡 Radar · !343 · blockiert, nicht haengend", "system"))
         board = server.parse_board(Path(tmp).read_text())
         it = server.find_item(board, {"id": "aaaaaaaaaaaa"})[0]
         check("append sys: Status unveraendert (kein for_owner)",
@@ -1282,6 +1367,47 @@ def test_gc_body_parent() -> None:
         Path(tmp).unlink(missing_ok=True)
 
 
+def test_gc_body_move() -> None:
+    """Karte per API in eine andere Thema/Spalte legen — der Drag als Kommando."""
+    fd, tmp = tempfile.mkstemp(suffix=".md")
+    # Moves schreiben Quelle und Ziel als ein Gesamtboard und akzeptieren deshalb nur
+    # die byte-kanonische Form. SYNTH lässt absichtlich optionale Abschnitte aus.
+    canonical = server.serialize_board(server.parse_board(SYNTH))
+    Path(tmp).write_text(canonical)
+    httpd, port = _serve(Path(tmp))
+    try:
+        code, result = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "move": "Thema/Next"})
+        board = server.parse_board(Path(tmp).read_text())
+        th = board["themes"][0]
+        check("gc-body move: 200 + changed", code == 200 and result.get("changed") is True)
+        check("gc-body move: Item liegt in Bald, nicht mehr in Jetzt",
+              [x.get("id") for x in th["cols"]["Bald"]] == ["bbbbbbbbbbbb"]
+              and all(x.get("id") != "bbbbbbbbbbbb" for x in th["cols"]["Jetzt"]))
+        code, result = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "move": "Thema/Bald"})
+        check("gc-body move: interner Spaltenname + idempotent", code == 200 and result.get("changed") is False)
+        # Zurück nach Jetzt, gleichzeitig unter aaaa hängen → landet direkt hinter dem Dach
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"},
+                                               "parent": "aaaaaaaaaaaa", "move": "Thema/Now"})
+        ids = [x.get("id", "") for x in server.parse_board(Path(tmp).read_text())["themes"][0]["cols"]["Jetzt"]]
+        check("gc-body move+parent: Sub reiht sich hinter sein Dach", code == 200
+              and ids[:2] == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"])
+        before = Path(tmp).read_text()
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "move": "Nirgends/Now"})
+        check("gc-body move: unbekanntes Thema → 404", code == 404)
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "move": "Thema/Sofort"})
+        check("gc-body move: unbekannte Spalte → 400", code == 400)
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "move": "Thema"})
+        check("gc-body move: ohne Slash → 400", code == 400)
+        check("gc-body move: Fehler schreiben nichts", Path(tmp).read_text() == before)
+        Path(tmp).write_text(SYNTH + "\nHandtext ohne Item-Form\n")
+        code, _ = _post(port, "/api/gc-body", {"addr": {"id": "bbbbbbbbbbbb"}, "move": "Thema/Next"})
+        check("gc-body move: nicht-kanonische Datei → 409", code == 409)
+    finally:
+        httpd.shutdown()
+        os.close(fd)
+        Path(tmp).unlink(missing_ok=True)
+
+
 def test_gc_body_chirurgisch_bei_nichtkanonischer_datei() -> None:
     """lost=0 reicht nicht: fremde, nur umsortierbare Zeilen bleiben byteidentisch."""
     # Item B: Body steht nach @gc-id. Nichts geht verloren, aber ein Full-Serialize
@@ -1355,7 +1481,9 @@ def test_gc_append_chirurgisch() -> None:
                          "addr": {"id": "aaaaaaaaaaaa"}, "session": "sess-neu"})
         after = Path(tmp).read_text()
         check("chirurgisch: gesundes Item bleibt beantwortbar", code == 200 and r.get("ok"))
-        check("chirurgisch: Turn steht in der Datei", "@gc-re: antwort trotz defekt" in after)
+        check("chirurgisch: Turn mit Agent-Provenienz steht in der Datei",
+              _has_turn(Path(tmp), {"id": "aaaaaaaaaaaa"}, "reply",
+                        "antwort trotz defekt", "agent"))
         check("chirurgisch: Session-Pointer mitgeschrieben", "@gc-session: sess-neu" in after)
         check("chirurgisch: kaputte Zeile überlebt", "@gc-id: cccccccccccc" in after
               and "@gc-id: bbbbbbbbbbbb" in after)
@@ -1379,9 +1507,13 @@ def test_gc_append_chirurgisch() -> None:
                "addr": {"id": "aaaaaaaaaaaa"}, "session": "sess-neu"})
         sauber = Path(tmp).read_text()
         chirurg = server.serialize_board(server.parse_board(after))
-        check("chirurgisch: gleiches Ergebnis wie Whole-Board-Weg",
-              [ln for ln in chirurg.split("\n") if "aaaaaaaaaaaa" in ln or "antwort trotz" in ln]
-              == [ln for ln in sauber.split("\n") if "aaaaaaaaaaaa" in ln or "antwort trotz" in ln])
+        chirurg_item = server.find_item(server.parse_board(chirurg), {"id": "aaaaaaaaaaaa"})[0]
+        sauber_item = server.find_item(server.parse_board(sauber), {"id": "aaaaaaaaaaaa"})[0]
+        check("chirurgisch: gleiches fachliches Ergebnis wie Whole-Board-Weg",
+              [(e.get("kind"), e.get("text"), e.get("author"))
+               for e in chirurg_item["thread"]]
+              == [(e.get("kind"), e.get("text"), e.get("author"))
+                  for e in sauber_item["thread"]])
     finally:
         httpd.shutdown()
         Path(tmp).unlink(missing_ok=True)
@@ -1549,7 +1681,9 @@ def test_gc_run_endpoint() -> None:
             while time.time() < deadline and "fa4e5e55-0000-4000-8000-00000000e2e1" not in Path(tmp).read_text():
                 time.sleep(0.2)
             text = Path(tmp).read_text()
-            check("run: @gc-re im Markdown", "@gc-re: testantwort vom agenten" in text)
+            check("run: Agent-Antwort mit Provenienz im Markdown",
+                  _has_turn(Path(tmp), {"id": "bbbbbbbbbbbb"}, "reply",
+                            "testantwort vom agenten", "agent"))
             check("run: @gc-session mit uuid + label", "@gc-session: fa4e5e55-0000-4000-8000-00000000e2e1 · board-offener-faden" in text)
             deadline = time.time() + 5
             while time.time() < deadline and json.load(urllib.request.urlopen(
@@ -1619,7 +1753,12 @@ def test_gc_run_failure_visible() -> None:
             while time.time() < deadline and "❌" not in Path(tmp).read_text():
                 time.sleep(0.2)
             text = Path(tmp).read_text()
-            check("fail: ❌-Envelope im Faden", "@gc-re: ❌ Agent run failed:" in text and "no result" in text)
+            failed = [e for e in _turns(Path(tmp), {"id": "bbbbbbbbbbbb"})
+                      if e.get("kind") == "reply"
+                      and e.get("text", "").startswith("❌ Agent run failed:")]
+            check("fail: ❌-Envelope mit Agent-Provenienz im Faden",
+                  len(failed) == 1 and failed[0].get("author") == "agent"
+                  and bool(failed[0].get("turn_id")) and "no result" in failed[0]["text"])
             check("fail: Board weiter verlustfrei parsebar",
                   server.lost_total(text, server.parse_board(text)) == 0)
             # E2E für Q3 (2026-07-23): der Fehllauf muss jetzt auch AM ITEM sichtbar sein,
@@ -1659,8 +1798,9 @@ def test_sol_final_fixes() -> None:
                             {"kind": "ask", "text": "zeile eins\nzeile zwei\n\nzeile drei",
                              "addr": {"id": "aaaaaaaaaaaa"}})
             text = Path(tmp).read_text()
-            check("multiline: normalisiert zu Einzeiler", code == 200
-                  and "@gc: zeile eins · zeile zwei · zeile drei" in text)
+            check("multiline: normalisiert mit Human-Provenienz zu Einzeiler", code == 200
+                  and _has_turn(Path(tmp), {"id": "aaaaaaaaaaaa"}, "ask",
+                                "zeile eins · zeile zwei · zeile drei", "human"))
             check("multiline: Board danach verlustfrei", server.lost_total(text, server.parse_board(text)) == 0)
 
             # timeout-Müll → 400 und KEIN hängender RUNNING-Eintrag
@@ -1725,11 +1865,11 @@ def test_gc_run_all_and_sidecar_route() -> None:
             # Jeder Run postet seine Antwort einzeln — auf BEIDE neuen Antworten warten.
             # (Flake 2026-07-16: vorher wurde nur bis zur ERSTEN neuen @gc-re gewartet,
             #  die Assertion darunter verlangte aber schon beide.)
-            while time.time() < deadline and Path(tmp).read_text().count("@gc-re: testantwort vom agenten") < 2:
+            while time.time() < deadline and _count_all_turns(
+                    Path(tmp), "reply", "testantwort vom agenten", "agent") < 2:
                 time.sleep(0.2)
-            text = Path(tmp).read_text()
             check("runall: beide Items beantwortet",
-                  text.count("@gc-re: testantwort vom agenten") == 2)
+                  _count_all_turns(Path(tmp), "reply", "testantwort vom agenten", "agent") == 2)
             deadline = time.time() + 5
             while time.time() < deadline and json.load(urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/api/board")).get("running"):
@@ -1780,6 +1920,12 @@ def test_model_choice() -> None:
     finally:
         httpd.shutdown()
         Path(tmp).unlink(missing_ok=True)
+
+
+
+
+
+
 
 
 def test_long_run_policy() -> None:
@@ -2318,7 +2464,9 @@ def test_journal_recovery() -> None:
                 "pid": 1, "started": 0, "timeout": 900}))
             notes = gc_runner.recover_journals(base, journal_dir=jd)
             text = Path(tmp).read_text()
-            check("recover: ready-Antwort landet im Faden", "@gc-re: gerettete antwort" in text)
+            check("recover: ready-Antwort landet mit Agent-Provenienz im Faden",
+                  _has_turn(Path(tmp), {"id": "bbbbbbbbbbbb"}, "reply",
+                            "gerettete antwort", "agent"))
             check("recover: Session mitgeschrieben", "@gc-session: fa4e5e55-0000-4000-8000-00000000e2e1 · board-x" in text)
             check("recover: Journal weggeräumt", not list(jd.glob("*.meta.json")) and len(notes) == 1)
 
@@ -2331,7 +2479,8 @@ def test_journal_recovery() -> None:
                 "permission_denials": [], "subtype": "success", "is_error": False}))
             gc_runner.recover_journals(base, journal_dir=jd)
             check("recover: stdout eines toten Runs wird geerntet",
-                  "@gc-re: aus dem journal geerntet" in Path(tmp).read_text())
+                  _has_turn(Path(tmp), {"id": "aaaaaaaaaaaa"}, "reply",
+                            "aus dem journal geerntet", "agent"))
 
             # (3) Idempotenz: Journal für ein Item, das nicht (mehr) auf GC wartet → nur wegräumen
             (jd / "run-aaaaaaaaaaaa-3.meta.json").write_text(json.dumps({
@@ -2681,7 +2830,8 @@ def test_stream_view_opencode_ereignisse() -> None:
             {"type": "text", "sessionID": "ses_realshape", "part": {
                 "type": "text", "text": "I found the cause."}},
             {"type": "step_finish", "sessionID": "ses_realshape", "part": {
-                "type": "step-finish", "tokens": {"total": 321}}},
+                "type": "step-finish", "tokens": {"total": 321, "input": 21,
+                    "cache": {"read": 300}}}},
         ]
         (d / "run-eeeeeeeeeeee-20260823-214804-4ba0.out.json").write_text(
             "\n".join(json.dumps(event) for event in events) + "\n")
@@ -2693,7 +2843,8 @@ def test_stream_view_opencode_ereignisse() -> None:
               and "README.md" in view["rows"][1]["text"])
         check("opencode-view: Text und Schrittabschluss werden lesbar",
               [row["kind"] for row in view["rows"]] == ["start", "tool", "say", "result"]
-              and "321 tokens" in view["rows"][-1]["text"])
+              and "321 tokens" in view["rows"][-1]["text"]
+              and "93% cache" in view["rows"][-1]["text"])
 
     denied = server._stream_row({"type": "tool_use", "sessionID": "ses_realshape",
         "part": {"tool": "bash", "state": {"status": "denied",
@@ -2723,7 +2874,7 @@ def test_stream_view_opencode_ereignisse() -> None:
 
 
 def test_stream_view_und_kill_log() -> None:
-    """Die Einsicht in den Ereignisstrom (Bens „was macht er gerade") und das Kill-Log."""
+    """Die Einsicht in den Ereignisstrom (the owner’s „was macht er gerade") und das Kill-Log."""
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
         (d / "run-dddddddddddd-20260727-120000-aaaa.out.json").write_text("\n".join([
@@ -3119,13 +3270,16 @@ def test_quick_capture_endpoint() -> None:
             check("capture: landet im ersten Thema des Boards",
                   text.index("## Thema") < text.index("x" * 60) < text.index("### Next"))
             check("capture: Titel gekürzt auf 60 Zeichen + …", ("x" * 60 + "…") in text)
-            check("capture: voller Text als @gc:-Turn", f"@gc: {long_text}" in text)
+            check("capture: voller Text als Human-Turn", _has_turn(
+                  Path(tmp), {"id": r["id"]}, "ask", long_text, "human"))
 
             deadline = time.time() + 15
             while time.time() < deadline and "fa4e5e55-0000-4000-8000-00000000e2e1" not in Path(tmp).read_text():
                 time.sleep(0.2)
             text = Path(tmp).read_text()
-            check("capture: Agent-Run beantwortet das neue Item", "@gc-re: testantwort vom agenten" in text)
+            check("capture: Agent-Run beantwortet das neue Item mit Provenienz",
+                  _has_turn(Path(tmp), {"id": r["id"]}, "reply",
+                            "testantwort vom agenten", "agent"))
 
             code2, r2 = _post(port, "/api/quick-capture", {"text": "  "})
             check("capture: leerer Text → 400", code2 == 400 and "text" in r2.get("error", ""))
@@ -3320,6 +3474,8 @@ def test_interrupt_und_weiter() -> None:
             Path(tmp).unlink(missing_ok=True)
     check("interrupt: kein Sidecar leckt ins produktive inbox/gc-threads",
           set(gc_runner.SIDECAR_DIR.glob("bbbbbbbbbbbb-*.md")) == live_sidecars_before)
+
+
 
 
 def test_gc_last_roundtrip_and_append() -> None:
@@ -3801,6 +3957,15 @@ def test_action_run_endpoint() -> None:
             check("action: status wird durchgereicht, Prompt weiterhin nicht",
                   aj2["actions"][0].get("status") == "Stand 2026-07-27: 0 offen"
                   and "prompt" not in aj2["actions"][0])
+            # Kartenvertrag (22.09.): state + headline fliessen durch, ein ungueltiger state
+            # macht die Action als Ganzes ungueltig (registries) statt still zu passieren.
+            server.ACTIONS_FILE.write_text(json.dumps({"actions": [
+                {**actions["actions"][0], "state": "warn", "headline": "2 open"},
+                {**actions["actions"][0], "key": "kaputt", "state": "broken"}]}))
+            aj2b = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/actions"))
+            check("action: state + headline werden durchgereicht",
+                  [(a.get("state"), a.get("headline")) for a in aj2b["actions"]] == [("warn", "2 open")]
+                  and "state" in aj2b.get("error", ""))
             # run_endpoint muss durchfliessen: fehlt es in der Payload, faellt die UI
             # still auf /api/action-run zurueck und der Sonderpfad einer Action mit
             # eigenem Trigger-Thread bleibt tot — genau der Bug vom 11.08.
@@ -3824,8 +3989,11 @@ def test_action_run_endpoint() -> None:
             check("action: Pseudo-Item mit Marker+Mission+Klick-Turn",
                   "- [ ] Test-Action" in cockpit_part and "action:test-act" in cockpit_part
                   and "Mach die Testsache." in cockpit_part
-                  and "@gc: ▶ Run Test-Action" in cockpit_part)
-            check("action: Antwort im Aktions-Faden", "@gc-re: testantwort vom agenten" in cockpit_part)
+                  and _has_turn(Path(tmp), {"id": r["id"]}, "ask",
+                                "▶ Run Test-Action", "system"))
+            check("action: Antwort mit Agent-Provenienz im Aktions-Faden",
+                  _has_turn(Path(tmp), {"id": r["id"]}, "reply",
+                            "testantwort vom agenten", "agent"))
             check("action: Roundtrip nach Run sauber",
                   server.lost_total(text, server.parse_board(text)) == 0)
             # zweiter Klick: Item wird wiederverwendet (1x '- [ ] Test-Action'), neuer Turn
@@ -3843,7 +4011,8 @@ def test_action_run_endpoint() -> None:
             text2 = Path(tmp).read_text()
             check("action: 2. Klick reused Item", code2 == 202
                   and text2.count("- [ ] Test-Action") == 1
-                  and text2.count("@gc: ▶ Run Test-Action") == 2)
+                  and _count_turns(Path(tmp), {"id": r["id"]}, "ask",
+                                   "▶ Run Test-Action") == 2)
             code3, _ = _post(port, "/api/action-run", {"key": "gibtsnicht"})
             check("action: unbekannte Action → 404", code3 == 404)
         finally:
@@ -3875,8 +4044,10 @@ def test_action_run_fresh_session() -> None:
             f'open({str(argv_log)!r}, "a").write(json.dumps(sys.argv) + "\\n")\n' + OK_JSON))
         httpd, port = _serve(Path(tmp))
         try:
+            action_id = ""
             for n in (1, 2):
-                code, _ = _post(port, "/api/action-run", {"key": "fresh-act"})
+                code, result = _post(port, "/api/action-run", {"key": "fresh-act"})
+                action_id = result.get("id", action_id)
                 check(f"fresh: Klick {n} → 202", code == 202)
                 deadline = time.time() + 15
                 while time.time() < deadline and Path(tmp).read_text().split(
@@ -3891,8 +4062,9 @@ def test_action_run_fresh_session() -> None:
             check("fresh: kein --resume bei ▶", all("--resume" not in c for c in calls))
             cockpit = Path(tmp).read_text().split("# Cockpit")[-1].split("# Personen")[0]
             check("fresh: Faden bleibt vollständig",
-                  cockpit.count("@gc: ▶ Run Fresh-Action") == 2
-                  and cockpit.count("@gc-re: testantwort vom agenten") == 2)
+                  _count_turns(Path(tmp), {"id": action_id}, "ask", "▶ Run Fresh-Action") == 2
+                  and _count_turns(Path(tmp), {"id": action_id}, "reply",
+                                   "testantwort vom agenten") == 2)
             check("fresh: neue session_id wird wieder abgelegt",
                   "@gc-session: fa4e5e55-0000-4000-8000-00000000e2e1" in cockpit)
         finally:
@@ -3923,7 +4095,10 @@ def test_chat_send() -> None:
             check("chat: Tages-Item mit Marker + Mission",
                   f"- [ ] Chat {today}" in cp and f"chat:{today}" in cp and "daily cockpit chat" in cp)
             check("chat: Turn + Antwort im Faden",
-                  "@gc: leg mal ein todo für X an" in cp and "@gc-re: testantwort vom agenten" in cp)
+                  _has_turn(Path(tmp), {"id": r["id"]}, "ask",
+                            "leg mal ein todo für X an", "human")
+                  and _has_turn(Path(tmp), {"id": r["id"]}, "reply",
+                                "testantwort vom agenten", "agent"))
             code2, _ = _post(port, "/api/chat-send", {"text": "noch eins"})
             deadline = time.time() + 15
             while time.time() < deadline and json.load(urllib.request.urlopen(
@@ -4076,8 +4251,22 @@ def test_restart_drain() -> None:
             check("drain: Semaphor wird trotzdem freigegeben", sem.acquire(blocking=False))
             check("drain: Item landet nicht in RUNNING", "drainxx" not in server.RUNNING)
 
-            os.utime(lock, (0, time.time() - server.RESTART_DRAIN_MAX - 60))
+            os.utime(lock, (0, time.time() - server.RESTART_LOCK_MAX_AGE - 60))
             check("drain: verwaistes Lock blockiert nicht ewig",
+                  server.restart_draining() is False)
+
+            # Seit 21.09. muss ein verwaistes Lock nicht mehr eine Stunde alt werden:
+            # der Halter legt seine PID daneben, ein toter Halter zählt sofort als weg.
+            # Ohne das beantwortete das Board nach einem hart gestorbenen Wächter JEDEN
+            # Neustart-Klick mit „Restart is already in progress" (the owner 21.09.).
+            os.utime(lock, None)
+            (lock / "pid").write_text("999999")   # freie PID: existiert sicher nicht
+            check("drain: totes Lock mit PID blockiert nicht", server.restart_draining() is False)
+            (lock / "pid").write_text(str(os.getpid()))
+            check("drain: lebendes Lock mit PID blockiert", server.restart_draining() is True)
+            (lock / "pid").unlink()
+            os.utime(lock, (0, time.time() - server.RESTART_LOCK_NOPID_GRACE - 5))
+            check("drain: Lock ohne PID nur in der Gnadenfrist frisch",
                   server.restart_draining() is False)
     finally:
         server.RESTART_LOCK = old_lock
@@ -4198,7 +4387,7 @@ def test_wesen_graduiert_und_gedaechtnis() -> None:
     viele = server.wesen_status(board_md(frisch(3) + "\n" + uralt(4)), today, noarch)
     check("wesen: mehrere überalterte Items eskalieren sehr wohl",
           viele["alter"] > einer["alter"] + 0.3 and viele["strain"] > einer["strain"] + 0.2)
-    # (c) Jedes einzelne Häkchen bewegt den Score sichtbar (Bens „spürbar bei jedem Abhaken").
+    # (c) Jedes einzelne Häkchen bewegt den Score sichtbar (the owner’s „spürbar bei jedem Abhaken").
     stufen = [server.wesen_status(board_md(frisch(k)), today, noarch)["strain"]
               for k in (12, 11, 10)]
     check("wesen: jedes Häkchen senkt die Last messbar und monoton",
@@ -4529,6 +4718,18 @@ def test_turn_times_are_derived_not_stored() -> None:
     check("annotate: Serialisierung unverändert (at ist Anzeige, kein Inhalt)",
           server.item_lines(it) == vorher)
 
+    # Seit 24.09. (Faden cf2357146820) trägt jeder neue Turn seine Zeit im gc-meta — auch
+    # der kurze ohne Sidecar. Die hat Vorrang vor dem Dateinamen.
+    meta = '<!--gc-meta:{"id":"' + "c" * 32 + '","author":"agent","at":"2026-09-24 14:31","model":"claude-opus-5-5"}-->'
+    board = server.parse_board(text + f"  @gc-re: {meta} kurz\n")
+    it = board["themes"][0]["cols"]["Jetzt"][0]
+    vorher = server.item_lines(it)
+    server.annotate_turn_times(board)
+    check("annotate: kurzer Turn mit gc-meta-Zeit bekommt at", it["thread"][2].get("at") == "2026-09-24 14:31")
+    check("annotate: Modell kommt beim Client an", it["thread"][2].get("model") == "claude-opus-5-5")
+    check("annotate: Round-Trip behält at + model", server.item_lines(it) == vorher
+          and '"at":"2026-09-24 14:31","model":"claude-opus-5-5"' in "\n".join(vorher))
+
     # Chronologie-Wächter: die Diät-Migration (2026-07-17, 24 Dateien in einer Minute) hat
     # Altbestand nachträglich ausgelagert — solche Stempel liegen NACH den Antworten, die
     # sie ausgelöst haben. Ungefiltert stand im Board „Frage 2 Tage nach der Antwort".
@@ -4600,7 +4801,7 @@ def test_board_diet_append_and_prompt() -> None:
             check("diet-append: kurzer Turn weiterhin wortgleich inline",
                   _post(port, "/api/gc-append", {"kind": "ask", "text": "kurz",
                                                  "addr": {"id": "aaaaaaaaaaaa"}})[0] == 200
-                  and "@gc: kurz" in board.read_text())
+                  and _has_turn(board, {"id": "aaaaaaaaaaaa"}, "ask", "kurz", "human"))
         finally:
             httpd.shutdown()
 
@@ -4715,7 +4916,7 @@ RITUALE_FIXTURE = {
 
 def _ritual_env(tmp_path: Path, persist: Path | None = None):
     """rituale.json + Journal-Pfad in einen Temp-Ordner umbiegen — nie gegen die echten
-    Dateien testen (Journal UND persist_personal, die Therapie-Ablage ist tabu)."""
+    Dateien testen (Journal UND persist_personal, die persönliche Ablage ist tabu)."""
     cfg = json.loads(json.dumps(RITUALE_FIXTURE))
     if persist is not None:
         cfg["rituale"]["reflection"]["persist_personal"] = str(persist)
@@ -5796,12 +5997,15 @@ def main() -> int:
                test_gc_append_radar_ist_nativ_ausser_bei_offenem_auftrag,
                test_resume_prompt_traegt_externen_radar_turn_eine_runde_mit,
                test_gc_body_endpoint,
+               test_gc_body_parent, test_gc_body_move,
                test_gc_body_chirurgisch_bei_nichtkanonischer_datei, test_gc_append_chirurgisch,
                test_raw_item_blocks, test_new_id_collision_retry,
                test_runner_spawn_envelopes, test_runner_inline_and_sidecar,
                test_gc_run_endpoint, test_gc_run_failure_visible,
                test_sol_final_fixes, test_gc_run_all_and_sidecar_route,
-               test_model_choice, test_long_run_policy,
+               test_model_choice,
+
+               test_long_run_policy,
                test_sweep_respects_open_threads, test_sweep_closes_done_threads,
                test_sweep_stamps_missing_done_at,
                test_sweep_retires_chat_cards,

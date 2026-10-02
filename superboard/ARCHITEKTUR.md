@@ -21,6 +21,8 @@ facts out of this file is what keeps it worth reading.
 - `contract.py` — composes the agent's completion contract from generic core
   rules plus an optional instance-specific rule file (`board.contract.md`,
   not shipped in this extraction).
+- `provenance.py` — turn authorship, timestamps, model metadata and append-only
+  correction records. Unknown historical authors remain unverified.
 - `sidecar.py` — long-turn externalization: writes oversized thread turns to
   `inbox/gc-threads/` and leaves a short pointer in the thread.
 - `sweep.py` — retention: moves finished (`done`) items out of the live
@@ -29,8 +31,9 @@ facts out of this file is what keeps it worth reading.
   cards) and `rituals.json` (recurring ritual definitions).
 - `thread_search.py` — cross-run context retrieval: lexical search over
   board/archive/thread history with a bounded, evidence-only selection.
-- `terminal.py` — read-only web view of an item's live agent session, plus
-  the `resume` command table per runner lane.
+- `terminal.py` — optional writable terminal for an item’s agent session, using
+  `tmux` and a loopback-only `ttyd` viewer. A held terminal session reserves its item
+  so a headless runner cannot write to the same session concurrently.
 - `bump.py` — mechanical version bump (patch/minor/major from commit size),
   paired with the CHANGELOG-sync convention checked by the test suite.
 - `receipt.py` / `receipt_hook.py` — machine-readable per-run fact log and
@@ -235,3 +238,23 @@ version; a copied doc goes stale on the next upgrade, and onboarding cards
   share a board, threads or runtime data, and the runner's identity wrapper can
   strip the operator's Claude configuration from a run — but an agent started in
   a workspace still has the read access of the user who started it.
+
+
+## Thread provenance and bounded continuation
+
+Turn direction (`ask`, `reply`, `done`, `sys`) is separate from author identity
+(`human`, `agent`, `system`, `unknown`). External integrations explicitly identify
+agent-created asks. Retained turns are append-only; whole-board writes preserve
+existing provenance, and corrections use a separate record rather than rewriting
+historical text. These labels describe provenance, not authentication: the API
+continues to trust local callers.
+
+The runner may continue a session once when its result indicates unfinished background
+work. That continuation occurs before the final reply is appended; it is not an
+unbounded automatic retry loop. Requested model aliases and runtime-reported model
+metadata are distinct and must not be presented as interchangeable evidence.
+
+Core board startup and ordinary runs do not depend on classifier/reviewer modules.
+The public package contains no installation-specific review provider settings.
+The terminal is an optional local capability, not a network service: its unauthenticated
+viewer binds to loopback and validates the requested item-session name.

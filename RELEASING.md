@@ -102,3 +102,9 @@ README claim nobody verified this round.
   commit than HEAD (here 04.09. instead of 05.09.) to leave out an untested feature —
   `git archive <commit>` + `git merge-file` against the ledger's base commit does this
   cleanly; the ledger then records the ported commit's hashes, not HEAD's.
+
+- 2026-10-02 · 0.4.0: record the exact common ancestor for a three-way port and keep
+  package-specific restart paths separate from origin service scripts. A missing-CLI
+  browser recording is not proof of agent replies: test a configured public CLI too.
+  Upgrade from the published previous wheel, then repeat startup to check idempotence.
+  Refresh screenshots from a clean workspace; do not publish local provider settings.

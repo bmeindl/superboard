@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -33,6 +34,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import provenance
 import sidecar as _sc  # geteilte Sidecar-Logik (auch server.py/migrate_diet.py) — board.md-Diät 2026-07-16
 import git_state as _git  # Kern: Prompt-Gitblock + Faden-Anchor, unabhängig von Receipts
 import receipt_hook as _receipt  # optionale Run-Telemetrie; nie Teil des Kernpfads
@@ -88,6 +90,7 @@ BASE_ENV = dict(os.environ)
 RUN_ENV = default_claude_env(
     BASE_ENV,
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS="1",
+    FORCE_PROMPT_CACHING_5M="1",
 )
 # Actively REMOVED, not merely unset: BASE_ENV inherits the board server's own
 # environment, so a run started from inside a run would otherwise pass the old
@@ -237,7 +240,28 @@ AGENT_SETTINGS = json.dumps({"permissions": {"deny": [
 #     begrenzt nur das SCHREIBEN (cwd + /tmp); LESEN ist überall erlaubt, auch die
 #     Credential-Verzeichnisse (s. AGENT_SETTINGS) und .env*. Offene Frage 1 im Plan —
 #     solange sie offen ist, ist Codex bewusst nur pro Run wählbar und nie Default.
-CODEX_CMD = os.environ.get("GC_RUNNER_CODEX", "/Applications/ChatGPT.app/Contents/Resources/codex")
+#   * Der Pfad in der App wandert: ChatGPT 26.928 (02.10.2026) hat die Binary nach
+#     `Resources/codex-cli/bin/codex` verschoben. Deshalb Kandidatenliste, neuester Ort
+#     zuerst, dann PATH — und die Auflösung bei JEDEM Spawn statt einmal beim Import: das
+#     App-Update kommt, während der Server läuft.
+_CODEX_CANDIDATES = (
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    "/Applications/ChatGPT.app/Contents/Resources/codex",
+)
+
+
+def codex_cmd() -> str:
+    """Codex-Binary: GC_RUNNER_CODEX, sonst der erste existierende App-Pfad, sonst PATH."""
+    env = os.environ.get("GC_RUNNER_CODEX")
+    if env:
+        return env
+    for cand in _CODEX_CANDIDATES:
+        if os.access(cand, os.X_OK):
+            return cand
+    return shutil.which("codex") or _CODEX_CANDIDATES[0]
+
+
+CODEX_CMD = codex_cmd()
 # Item-Typen des Codex-Ereignisstroms, die als „Werkzeugaufruf" zählen (Schrittzähler und
 # Stillstands-Erkennung). `agent_message` und `todo_list` sind KEINE Werkzeuge.
 CODEX_TOOL_ITEMS = frozenset({"command_execution", "file_change", "mcp_tool_call",
@@ -292,22 +316,14 @@ PROMPT_CONTRACT = _contract.render("full")
 PROMPT_REMINDER = _contract.render("reminder")
 
 
-def _contract_for(runner: str, variant: str = "full") -> str:
-    """Kontrakt mit dem CLI-Handoff-Befehl des RICHTIGEN Runners (Phase 7).
-
-    Der Kontrakt-Text nennt für session-gebundene Auth-Handoffs wörtlich
-    `claude --resume <SESSION>` — ein Codex-Agent würde diesen Befehl brav in seine
-    Handoff-Antwort schreiben, obwohl seine Session damit nicht erreichbar ist.
-    Ersetzt wird der Laufzeit-String, nicht die Konstante: Claude bleibt der Default.
-    CODEX_CMD steht mit vollem Pfad im Text, weil `codex` nicht im PATH liegt."""
-    base = PROMPT_CONTRACT if variant == "full" else PROMPT_REMINDER
+def _contract_for(runner: str, variant: str = "full", model: str = "") -> str:
+    """Render the runtime model, runner and matching authentication handoff."""
+    base = _contract.render(variant, runner=runner, model=model)
     if runner != "codex":
-        return base.replace("`claude --resume <SESSION>`",
-                            f"`{PRIVATE_CMD} --resume <SESSION>`")
-    return base.replace(
-        "`claude --resume <SESSION>` + `!<auth-cmd>`",
-        f"`{CODEX_CMD} resume <SESSION>` and run the authentication command there",
-    ).replace("with your actual session UUID", "with your actual thread ID")
+        return base.replace("`claude --resume <SESSION>`", f"`{PRIVATE_CMD} --resume <SESSION>`")
+    return base.replace("`claude --resume <SESSION>` + `!<auth-cmd>`",
+                        f"`{codex_cmd()} resume <SESSION>` and run the authentication command there"
+                        ).replace("with your actual session UUID", "with your actual thread ID")
 
 
 # Handoff-Hinweis (2026-07-22, Blatt e67ba06428b7: Q1=B Agent beurteilt selbst,
@@ -450,7 +466,12 @@ def _expand_ask(text: str, sidecar_dir: Path | None) -> str:
 
 THREAD_TAIL_TURNS = 30  # Leak 4: frische Runs auf langen Fäden — nur der jüngste Teil als Text
 
-STAGE_VOCAB_HINT = "plan → rfc → approved → wip → review → tested → deployed"
+# Muss server.py:STAGE_VOCAB spiegeln. 2026-09-07: merged + live ergänzt (the owner, Faden
+# a290d8d11160) — ein Branch-Deploy ohne Merge ist nicht dauerhaft live, und „auf Prod gesehen"
+# ist ein eigener, letzter Schritt.
+STAGE_VOCAB_HINT = ("plan → rfc → approved → wip → review → tested → merged → deployed → live "
+                    "(`merged` = PR is on main; `deployed` = running on a named environment, say "
+                    "which one in the note; `live` = seen working on production)")
 
 
 def _stage_hint(pending: dict, runner: str = "claude") -> str:
@@ -539,6 +560,13 @@ def _inbox_hint(pending: dict) -> str:
         return ""
 
 
+
+def _author_label(event: dict, sidecar_dir: Path | None = None) -> str:
+    author = provenance.resolve(event, sidecar_dir)
+    return {"human": _cfg.OWNER, "agent": "AI", "system": "System",
+            "unknown": "Author unverified"}[author]
+
+
 def _hierarchy_block(pending: dict, resume: bool) -> str:
     """Der eigentliche Mehrwert hierarchischer Items: der Agent trägt den Kontext entlang
     der `@gc-parent`-Kante — runter beim Öffnen eines Sub-Fadens, hoch als Statuszeile in
@@ -553,7 +581,7 @@ def _hierarchy_block(pending: dict, resume: bool) -> str:
     out = []
     if par := h.get("parent"):
         turns = par.get("turns") or []
-        lines = [f"  [{_cfg.OWNER if t['kind'] == 'ask' else _cfg.AGENT}] {t.get('text', '')}" for t in turns]
+        lines = [f"  [{_author_label(t)}] {t.get('text', '')}" for t in turns]
         more = max(0, int(par.get("total_turns") or 0) - len(turns))
         out.append(
             f"\n\nSUB-THREAD — this item belongs to a parent item:\n"
@@ -727,7 +755,7 @@ def _long_run_block(pending: dict) -> str:
 
 
 def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
-                 runner: str = "claude", retrieved_context: str = "") -> str:
+                 runner: str = "claude", retrieved_context: str = "", model: str = "") -> str:
     """Erst-Run: volle Item-Beschreibung + Faden. Resume: nur der neue Turn —
     die Session hat den Kontext schon. Ausgelagerte Turns (Sidecar-Verweise)
     bleiben Kurzzeilen — NUR der neueste @gc:-Auftrag wird voll expandiert.
@@ -759,11 +787,12 @@ def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
         # Nach Board-Compact (⚙) einmalig wieder voll — @gc-last trägt dann "kompaktiert…"
         # und wird erst vom nächsten erfolgreichen Run überstempelt.
         compacted = (pending.get("gc_last") or "").startswith("kompaktiert")
-        contract = _contract_for(runner, "full" if compacted else "reminder")
+        contract = _contract_for(runner, "full" if compacted else "reminder", model)
         return (f"{note}Continue the board thread '{pending.get('title', '')}'. "
-                f"{radar_context}New turn from the owner:\n"
+                f"{radar_context}New task turn (author: {_author_label(next((e for e in reversed(turns) if e.get('kind') == 'ask'), {}), sidecar_dir)}):\n"
                 f"{last_ask}\n\n{contract}{_handoff_hint(pending.get('gc_last', ''))}"
-                f"{_body_write_hint(pending)}{_stage_hint(pending, runner)}{_hierarchy_block(pending, resume=True)}"
+                f"{_body_write_hint(pending)}{_stage_hint(pending, runner)}"
+                f"{_hierarchy_block(pending, resume=True)}"
                 f"{_git_context(addr.get('id', ''), resume=True)}{retrieved_context}{long_run}")
     where = f"{addr.get('name', '')}" + (f" / {addr.get('col')}" if addr.get("col") else "")
     body = "\n".join(pending.get("body", []))
@@ -779,7 +808,7 @@ def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
     if dropped > 0:
         entries = entries[-THREAD_TAIL_TURNS:]
     lines = [
-        f"[{ {'ask': _cfg.OWNER, 'reply': 'You (earlier)', 'sys': 'System'}[e['kind']] }] "
+        f"[{_author_label(e, sidecar_dir)}] "
         + (_expand_ask(e.get("text", ""), sidecar_dir) if i == last_ask_i else e.get("text", ""))
         for i, e in entries]
     if dropped > 0:
@@ -808,7 +837,7 @@ def build_prompt(pending: dict, resume: bool, sidecar_dir: Path | None = None,
             f"Board item: '{pending.get('title', '')}' ({where})\n"
             + (f"Item notes:\n{body}\n" if body else "")
             + f"\nBoard thread so far:\n{thread_txt}\n\n"
-            f"{carry}Task: Handle the latest [{_cfg.OWNER}] turn.\n\n{_contract_for(runner)}"
+            f"{carry}Task: Handle the latest task turn; preserve the author labels above.\n\n{_contract_for(runner, model=model)}"
             f"{_body_write_hint(pending)}{_stage_hint(pending, runner)}{_inbox_hint(pending)}"
             f"{_hierarchy_block(pending, resume=False)}"
             f"{_git_context(addr.get('id', ''), resume=False)}{retrieved_context}{long_run}")
@@ -951,13 +980,22 @@ def _erster_turn_cache(out_path: Path | None) -> dict:
 
 
 def log_usage(gc_id: str, title: str, model: str, resumed: bool, out: dict,
-              log_path: Path | None = None, out_path: Path | None = None) -> None:
-    """Eine JSONL-Zeile pro Run. Reines Reporting — darf einen Run NIE brechen."""
+              log_path: Path | None = None, out_path: Path | None = None,
+              started: float | None = None) -> None:
+    """Eine JSONL-Zeile pro Run. Reines Reporting — darf einen Run NIE brechen.
+
+    `wall_ms` ist die einzige Laufzeit, die JEDER Runner hat: `duration_ms` kommt aus dem
+    claude-Envelope, Codex und OpenCode liefern gar keine (394 Runs ohne Dauer, Stand
+    05.09.2026) — eine Latenz-Frage über Runner hinweg war damit aus dem Log nicht
+    beantwortbar. Gemessen wird die Board-Sicht: Preflight (Faden-Kontext) + Prozess +
+    Modell, also genau das, worauf the owner wartet."""
     try:
         rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "gc_id": gc_id, "title": title[:80],
                "model": model or "(default)", "resumed": resumed, "ok": out.get("ok", False),
                "identity": identity_for_runner(runner_of(model)),
                **(out.get("usage_summary") or {}), **_erster_turn_cache(out_path)}
+        if started:
+            rec["wall_ms"] = round((time.time() - started) * 1000)
         if out.get("thread_context"):
             rec["thread_context"] = out["thread_context"]
         with open(log_path or USAGE_LOG, "a", encoding="utf-8") as f:
@@ -1037,6 +1075,60 @@ def _envelope(stdout: str) -> tuple[dict | None, str, str]:
     return env, sid, haupt
 
 
+def _orphaned_background_tasks(stdout: str) -> list[dict]:
+    """Background jobs that were still running when the agent ended its turn.
+
+    Measured 2026-09-22 (claude 2.1.x, headless `-p`): when the model ends its turn while a
+    `run_in_background` Bash/Agent task is still running, the CLI does NOT wait for the task
+    and never gives the model another turn. It emits `result`, then kills the task
+    (`task_updated` patch.status=killed, `task_notification` status=stopped) and exits 0.
+    The interim "waiting for the job" message therefore became the run's final reply and the
+    work was silently lost (thread 70337c928482, 07.09.2026: `gh run watch` in the background,
+    prod deploy + Jira Done never reached the thread).
+
+    Returns one dict per task (task_id, description, status) that was started backgrounded
+    and had no completion (`completed`/`failed`) BEFORE the last `result` event — either it
+    was killed afterwards or the stream simply ended. Empty for the old single-object format.
+    """
+    started: dict[str, dict] = {}
+    finished: set[str] = set()
+    result_seen = False
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "result":
+            result_seen = True
+            continue
+        if ev.get("type") != "system":
+            continue
+        sub, tid = ev.get("subtype"), str(ev.get("task_id") or "")
+        if not tid:
+            continue
+        if sub == "task_started" and ev.get("is_backgrounded"):
+            started[tid] = {"task_id": tid, "description": str(ev.get("description") or ""),
+                            "status": "running"}
+        elif sub == "task_updated":
+            status = str((ev.get("patch") or {}).get("status") or "")
+            if tid in started and status:
+                started[tid]["status"] = status
+            if status in ("completed", "failed") and not result_seen:
+                finished.add(tid)
+        elif sub == "task_notification":
+            status = str(ev.get("status") or "")
+            if tid in started and status:
+                started[tid]["status"] = status
+            if status in ("completed", "failed") and not result_seen:
+                finished.add(tid)
+    return [t for tid, t in started.items() if tid not in finished]
+
+
 def _parse_claude_stdout(stdout: str, stderr: str, returncode: int | None) -> dict:
     """claude-Ausgabe → Outcome-Dict. Gemeinsamer Parser für den Live-Pfad
     (spawn_claude) und die Journal-Recovery (Server-Neustart mitten im Run)."""
@@ -1060,7 +1152,8 @@ def _parse_claude_stdout(stdout: str, stderr: str, returncode: int | None) -> di
     return {"ok": True, "runner": "claude", "reply": str(env.get("result", "")).strip(),
             "session_id": env.get("session_id", "") or sid_hint,
             "denials": env.get("permission_denials", []), "context_tokens": _context_tokens(env),
-            "usage_summary": _usage_summary(env, haupt_modell), "raw_error": ""}
+            "usage_summary": _usage_summary(env, haupt_modell), "raw_error": "",
+            "orphaned_tasks": _orphaned_background_tasks(stdout)}
 
 
 class StreamTail:
@@ -1250,8 +1343,14 @@ def watch_run(proc: subprocess.Popen, tail: StreamTail | None, hard_cap: int,
             pass
         now = time.time()
         if stop_path is not None and stop_path.exists():
+            # Der Inhalt der Marke trägt den Anlass: „restart" = ⚡ Restart now (der Run wird
+            # nach dem Tausch fortgesetzt, ist also kein Abbruch), sonst the owner’s ⏹.
+            try:
+                why = "restart" if stop_path.read_text().startswith("restart") else "stop"
+            except OSError:
+                why = "stop"
             _kill_proc(proc)
-            return "stop", now - started
+            return why, now - started
         if tail is not None:
             try:
                 size = tail.path.stat().st_size
@@ -1288,6 +1387,8 @@ def _kill_outcome(reason: str, elapsed: float, state: dict, hard_cap: int) -> di
     mins = int(elapsed // 60)
     if reason == "stop":
         head = f"⏹ Stopped by you after {mins} min"
+    elif reason == "restart":
+        head = f"⏹ Stopped for the board restart after {mins} min — it continues after the swap"
     elif reason == "idle":
         head = f"❌ Aborted after {mins} min: no activity for {IDLE_TIMEOUT // 60} min (stalled)"
     elif reason == "hung":
@@ -1429,9 +1530,10 @@ class RunJournal:
                          beat={**state, "at": time.time()})
         self._write()
 
-    def ready(self, reply_text: str, session: str, gc_last: str = "") -> None:
+    def ready(self, reply_text: str, session: str, gc_last: str = "", answer_model: str = "") -> None:
         """Der fertige @gc-re-Text steht ab jetzt auf Platte — der Append darf scheitern."""
-        self.meta.update(status="ready", reply_text=reply_text, session=session, gc_last=gc_last)
+        self.meta.update(status="ready", reply_text=reply_text, session=session, gc_last=gc_last,
+                         answer_model=answer_model)
         self._write()
 
     # Prompt-Mitschnitt (2026-07-22: „ich will sehen, was angehängt wurde"). Bewusst
@@ -1453,7 +1555,8 @@ class RunJournal:
             pass
 
     def discard(self) -> None:
-        for p in (self.meta_path, self.out_path, self.err_path, self.stop_path):
+        for p in (self.meta_path, self.out_path, self.err_path, self.stop_path,
+                  self.meta_path.with_suffix(".cut.json")):
             p.unlink(missing_ok=True)
 
 
@@ -1593,7 +1696,8 @@ def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mod
     # Wirkungslos mit --system-prompt (nutzen wir nicht). Nachgehalten wird das über
     # t1_read/t1_write in usage-log.jsonl — s. _erster_turn_cache().
     cmd += ["--exclude-dynamic-system-prompt-sections"]
-    cmd += ["--disallowed-tools", *disallowed_tools(model)]  # s. UNUSED_TOOLS: −22 % Prefix
+    blocked = disallowed_tools(model)
+    cmd += ["--disallowed-tools", *dict.fromkeys(blocked)]
     # stream-json = eine Zeile pro Ereignis (Herzschlag). --verbose ist dabei Pflicht.
     # Das Schluss-Event hat dieselben Felder wie der alte Einzel-Envelope, deshalb ändert
     # sich für alles hinter dem Parser nichts.
@@ -1678,6 +1782,10 @@ def _codex_argv(codex_cmd: str, resume_id: str, model: str, prompt_path: Path,
     sie verwerfen („Do not load $CODEX_HOME/config.toml", --help 0.147.0). Ohne eigenes
     Home bleibt das Flag drin, damit die persönlichen ChatGPT-App-Server draußen bleiben."""
     cmd = [codex_cmd, "exec", "--json", "--approve-for-me"]
+    # Codex 0.147 rejects --approve-for-me together with --sandbox read-only, while
+    # removing --approve-for-me cancels every MCP call. Stage 1 intentionally keeps
+    # the working MCP path and relies on the strong no-write prompt plus the review's
+    # retrospective write audit; hard read-only is explicitly not a build condition.
     if not own_home:
         cmd.append("--ignore-user-config")
     cmd += ["--skip-git-repo-check", "-C", str(GC_ROOT), "-o", str(last_path)]
@@ -1986,6 +2094,13 @@ def generate_codex_config(mcp: dict, root: Path) -> tuple[str, dict[str, str]]:
         f"[projects.{_toml_str(str(root))}]",
         'trust_level = "trusted"',
     ]
+    # Persist only this installation's explicit consent for the constrained tool.
+    # Never infer consent from an MCP server name or from review text in a thread.
+    try:
+        site = json.loads((root / "board.config.json").read_text())
+        review_approved = site.get("codex", {}).get("preapproved_text_reviews") is True
+    except (OSError, ValueError, AttributeError):
+        review_approved = False
     secret_env: dict[str, str] = {}
     servers = mcp.get("mcpServers", {})
     for name in CODEX_MCP_SERVERS:
@@ -2002,6 +2117,16 @@ def generate_codex_config(mcp: dict, root: Path) -> tuple[str, dict[str, str]]:
             secret_env[k] = v
         if env:
             lines.append("env_vars = [" + ", ".join(_toml_str(k) for k in env) + "]")
+        if name == "sub-agent":
+            # Allow the bounded synchronous request to report its timeout.
+            lines.append("tool_timeout_sec = 240")
+            local_review_server = (
+                srv["command"] == "uv"
+                and srv.get("args") == ["run", "--project", str(root / "tools/sub-agent-mcp"), "sub-agent-mcp"]
+            )
+            if review_approved and local_review_server:
+                lines += ["", '[mcp_servers."sub-agent".tools.run_review]',
+                          'approval_mode = "approve"']
     return "\n".join(lines) + "\n", secret_env
 
 
@@ -2156,7 +2281,7 @@ def spawn_agent(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mode
     Account routing is intentionally outside the profile picker."""
     runner = runner_of(model)
     if runner == "codex":
-        return spawn_codex(prompt, resume_id, CODEX_CMD, timeout, model, journal, on_beat,
+        return spawn_codex(prompt, resume_id, codex_cmd(), timeout, model, journal, on_beat,
                            extra_env, keep_awake)
     return spawn_claude(prompt, resume_id, claude_cmd, timeout, model, journal, on_beat,
                         extra_env, keep_awake)
@@ -2189,14 +2314,35 @@ def _with_denial_note(text: str, n: int) -> str:
     return f"{text[:m.start()].rstrip()} {note} {text[m.start():]}"
 
 
-def _post_append(base_url: str, gc_id: str, text: str, session: str, gc_last: str = "") -> None:
+def answer_model(out: dict) -> str:
+    """Das Modell, das die Antwort WIRKLICH geschrieben hat — für die Faden-Zeile.
+
+    Nicht der Alias: `opus` lief am 24.09. mal als claude-opus-5, mal als claude-opus-5-5
+    (usage-log.jsonl). Claude nennt es im `system/init` (→ usage_summary.main_model),
+    Codex/OpenCode nur in `models`. „default" ist keine Aussage → leer statt geraten."""
+    us = out.get("usage_summary") or {}
+    model = us.get("main_model") or next(iter(us.get("models") or []), "") or ""
+    model = str(model).split(":", 1)[-1] if str(model).startswith(("codex:", "opencode:")) else str(model)
+    return "" if model in ("", "default") else model
+
+
+def _post_append(base_url: str, gc_id: str, text: str, session: str, gc_last: str = "",
+                 answer_runner: str = "", model: str = "", cut_hint: dict | None = None) -> None:
     """Antwort zurück ins Board — mit Retries, weil das der einzige Weg ist,
     auf dem der Run sichtbar wird. Wirft nach 3 Fehlversuchen."""
-    payload = {"kind": "reply", "text": text, "addr": {"id": gc_id}}
+    payload = {"kind": "reply", "by": "agent", "text": text, "addr": {"id": gc_id}}
+    if reference := _sc.REF_RE.search(text):
+        payload["source"] = reference.group(1)
     if session:
         payload["session"] = session
     if gc_last:
         payload["gc_last"] = gc_last  # Run-Meta (Kontextgröße + Zeitpunkt) fürs Overlay
+    if answer_runner:
+        payload["answer_runner"] = answer_runner
+    if model:
+        payload["model"] = model
+    if cut_hint:
+        payload["cut_hint"] = cut_hint  # server binds it to exactly this reply
     req = urllib.request.Request(f"{base_url}/api/gc-append", data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
     last: Exception | None = None
@@ -2260,7 +2406,7 @@ def _outcome(out: dict, gc_id: str, title: str, sidecar_dir: Path) -> tuple[str,
         # 21.07. hinterließ am Item keine Spur, sichtbar nur beim zufälligen Öffnen des
         # Fadens. Gleiche Form wie der Erfolgsstempel (erstes Feld · Zeit · optional Kosten),
         # damit Frontend-Ersetzung und board_kpis („Runs heute") unverändert greifen.
-        gc_last = fail_stamp("⏹" if out.get("killed") == "stop" else "❌")
+        gc_last = fail_stamp("⏹" if out.get("killed") in ("stop", "restart") else "❌")
     else:
         gc_last = ""
     # Kosten-Transparenz (2026-07-22, Blatt e67ba06428b7 Q7=C): statt eines
@@ -2365,8 +2511,10 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
                 p.unlink(missing_ok=True)
             continue
 
+        model_used = ""
         if meta.get("status") == "ready":
             text, session, gc_last = meta.get("reply_text", ""), meta.get("session", ""), meta.get("gc_last", "")
+            model_used = meta.get("answer_model", "")
         elif meta.get("status") == "killed":
             # Ein gekillter Run ist NICHT verwaist — sein run_item() räumt gerade auf
             # (Kill-Log schreiben, Receipt, Antwort posten). Die pid ist dabei schon tot,
@@ -2396,11 +2544,12 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
                 text, session, gc_last = ("❌ Agent run aborted (server restart or crash) — "
                                           "no reply in the journal. Please restart it."), "", fail_stamp()
             else:
-                text, session, gc_last = _outcome(
-                    parse_by_runner(meta.get("model", ""), stdout, stderr, None, out_path),
-                    gc_id, title, sidecar_dir)
+                parsed = parse_by_runner(meta.get("model", ""), stdout, stderr, None, out_path)
+                model_used = answer_model(parsed)
+                text, session, gc_last = _outcome(parsed, gc_id, title, sidecar_dir)
         try:
-            _post_append(base_url, gc_id, text, session, gc_last)
+            _post_append(base_url, gc_id, text, session, gc_last,
+                         runner_of(meta.get("model", "")), model_used)
         except RuntimeError as e:
             notes.append(f"recover: {gc_id} — append failed ({e}); keeping journal")
             continue
@@ -2408,6 +2557,70 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
             p.unlink(missing_ok=True)
         notes.append(f"recover: {gc_id} ('{title}') appended")
     return notes
+
+
+def _bg_cut_note(tasks: list[dict]) -> str:
+    descs = "; ".join(f"«{t['description'] or t['task_id']}»" for t in tasks) or "(unnamed)"
+    return f"background job(s) {descs}"
+
+
+def _bg_continuation_prompt(out: dict) -> str:
+    """Follow-up prompt for a session whose turn ended with background work still running.
+    Tells the agent plainly what happened (the job is DEAD, nobody will notify it) and what
+    to do instead (wait in the foreground), so the next reply is the real result."""
+    interim = (out.get("reply") or "").strip().splitlines()
+    first = interim[0] if interim else "(empty)"
+    return (
+        f"Note from the board runner: your previous turn ended while {_bg_cut_note(out['orphaned_tasks'])} "
+        "were still running. In headless board runs the harness KILLS background tasks the moment "
+        "the turn ends and never wakes you up — that work did NOT complete and no notification "
+        f"will ever arrive. Your interim message («{first[:200]}») was NOT posted; this run continues "
+        "as one run and only your next final message reaches the thread.\n\n"
+        "Continue now: redo the wait in the FOREGROUND — Bash without run_in_background (timeout "
+        "up to 10 min per call, loop/poll if it takes longer), Agent calls with "
+        "run_in_background=false — then check the actual state of what you were waiting for and "
+        "deliver the real final answer (same first-line summary format). If the wait cannot fit "
+        "into this run, say exactly what is still outstanding and how to check it, instead of "
+        "starting another background job."
+    )
+
+
+def _continue_after_background_cut(out: dict, claude_cmd: str, timeout: int, model: str,
+                                   journal: "RunJournal", on_beat=None,
+                                   keep_awake: bool = False) -> dict:
+    """ONE automatic resume when the turn ended with orphaned background jobs (the owner 22.09.2026,
+    thread 0557fa238f8c: "it says a background agent is running, then nothing ever comes
+    back"). Same session, same journal (the retry branch in run_item does the same). The
+    continuation's reply becomes the run's reply; the interim text is kept as a trailing
+    note so the cut-off stays visible. Never loops: if the continuation orphans jobs again,
+    the reply only gets a ⚠ line."""
+    tasks = out.get("orphaned_tasks") or []
+    sid = out.get("session_id") or ""
+    prompt = _bg_continuation_prompt(out)
+    journal.save_prompt(prompt)
+    print(f"gc_runner: turn ended with {len(tasks)} orphaned background job(s) — resuming "
+          f"session {sid[:8]} once in the foreground", file=sys.stderr)
+    cont = spawn_agent(prompt, sid, claude_cmd, timeout, model, journal=journal,
+                       on_beat=on_beat, keep_awake=keep_awake)
+    interim_first = ((out.get("reply") or "").strip().splitlines() or ["(empty)"])[0]
+    if not cont["ok"]:
+        # Keep the interim reply (it is all we have) but say loudly that it is not final.
+        out["reply"] = ((out.get("reply") or "(empty interim reply)") + "\n\n⚠ This is an INTERIM message: the turn ended while "
+                        f"{_bg_cut_note(tasks)} were still running (headless runs cut those off), "
+                        f"and the automatic continuation failed ({cont.get('raw_error') or 'unknown'}). "
+                        "`@gc: continue` resumes the session.")
+        out["bg_continuation"] = "failed"
+        return out
+    note = (f"\n\n⏳ Runner note: the first turn ended while {_bg_cut_note(tasks)} were still "
+            f"running; headless runs cut those off, so the session was resumed once in the "
+            f"foreground. Interim message was: «{interim_first[:200]}»")
+    if cont.get("orphaned_tasks"):
+        note += (f"\n⚠ The continuation ALSO ended with {_bg_cut_note(cont['orphaned_tasks'])} still "
+                 "running — not resumed a second time; this reply may be incomplete.")
+    cont["reply"] = (cont.get("reply") or "(empty reply)") + note
+    cont["bg_continuation"] = "done"
+    return cont
+
 
 
 def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVATE_CMD,
@@ -2450,7 +2663,7 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
     # Fehler sind ein No-op; der eigentliche Board-Agent muss immer starten.
     lane = runner_of(model)
     provider = "codex" if lane == "codex" else "claude"
-    rerank_cmd = CODEX_CMD if provider == "codex" else claude_cmd
+    rerank_cmd = codex_cmd() if provider == "codex" else claude_cmd
     codex_home = (_p.DATA / "codex-home"
                   if provider == "codex" else None)
     board_path = sidecar_dir.parent / "board.md"
@@ -2465,7 +2678,7 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
     )
 
     prompt = build_prompt(pending, resume=bool(resume_id), sidecar_dir=sidecar_dir,
-                          runner=lane, retrieved_context=retrieved_context)
+                          runner=lane, retrieved_context=retrieved_context, model=resolve_profile(model)[0])
     journal.save_prompt(prompt)  # Observability: „🔍 Prompt anzeigen" im ⋯-Menü
     agent_env = {"GC_BOARD_URL": base_url}
     out = spawn_agent(prompt, resume_id, claude_cmd, timeout, model, journal=journal,
@@ -2478,7 +2691,8 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
         # `killed` schließt das explizit aus: ein gedrückter Stopp-Knopf darf sich nicht
         # dadurch rächen, dass sofort ein frischer Lauf hinterherstartet.
         retry_prompt = build_prompt(pending, resume=False, sidecar_dir=sidecar_dir,
-                                    runner=runner_of(model), retrieved_context=retrieved_context)
+                                    runner=runner_of(model), retrieved_context=retrieved_context,
+                                    model=resolve_profile(model)[0])
         journal.save_prompt(retry_prompt)  # der Retry-Prompt ist der, der wirklich lief
         out = spawn_agent(retry_prompt, "", claude_cmd, timeout, model, journal=journal,
                           on_beat=on_beat, extra_env=agent_env,
@@ -2486,20 +2700,25 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
         resumed = False
         if out["ok"]:
             out["reply"] = "(new session — the old one could no longer be resumed) " + out["reply"]
+    if (out.get("ok") and out.get("orphaned_tasks")
+            and runner_of(model).startswith("claude") and SESSION_ID_RE.match(out.get("session_id") or "")):
+        out = _continue_after_background_cut(out, claude_cmd, max(1, min(timeout, timeout - int(time.time() - started))), model, journal, on_beat,
+                                             keep_awake=run_mode == "long")
     out["thread_context"] = context_meta
     if out.get("killed"):
         log_kill(gc_id, title, model, out["killed"], out.get("elapsed", 0),
                  out.get("beat", {}), journal.out_path)
-    log_usage(gc_id, title, model, resumed, out, out_path=journal.out_path)
+    log_usage(gc_id, title, model, resumed, out, out_path=journal.out_path, started=started)
     # Receipt VOR dem Append: was der Runner gemessen hat, liegt damit auch dann auf
     # Platte, wenn der Append scheitert und der Run im Journal hängen bleibt.
     _receipt.write(gc_id, title, out, git_before, started)
     _anchor_save(gc_id, _git.snapshot())  # Bezugspunkt für den Git-Block des nächsten Turns
 
     text, session, gc_last = _outcome(out, gc_id, title, sidecar_dir)
-    journal.ready(text, session, gc_last)  # ab hier ist die Antwort durabel — der Append darf scheitern
+    model_used = answer_model(out)
+    journal.ready(text, session, gc_last, model_used)  # ab hier ist die Antwort durabel — der Append darf scheitern
     try:
-        _post_append(base_url, gc_id, text, session, gc_last)
+        _post_append(base_url, gc_id, text, session, gc_last, runner_of(model), model_used)
     except RuntimeError as e:
         # Journal bleibt liegen — recover_journals() trägt beim nächsten Serverstart nach.
         print(f"gc_runner: {e} — reply is stored in journal {journal.meta_path.name}", file=sys.stderr)

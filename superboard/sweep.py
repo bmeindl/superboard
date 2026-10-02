@@ -48,6 +48,8 @@ Exit 0 = ok (auch wenn nichts zu tun), Exit 1 = Fehler.
 """
 from __future__ import annotations
 
+import provenance
+
 import argparse
 import json
 import re
@@ -360,7 +362,7 @@ def fmt_item(it: dict, origin: str) -> str:
         lines.append("  @wait: " + " ".join(p for p in (it.get("wait", ""), since) if p))
     if it.get("done_at"):
         lines.append(f"  @done-at: {it['done_at']}")
-    lines += [f"  {gc_tag(e['kind'])} {e.get('text', '')}".rstrip() for e in it.get("thread", [])]
+    lines += [f"  {gc_tag(e['kind'])} {provenance.encode(e)}".rstrip() for e in it.get("thread", [])]
     if it.get("session"):
         lines.append(f"  @gc-session: {it['session']}")
     if it.get("sessions"):

@@ -7,6 +7,26 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
 — that number counts every change by size and is not a stability promise.
 `CHANGELOG.md` inside the package is that internal build history.
 
+## [0.4.0] — 2026-10-02 · clearer threads and a refreshed board
+
+- Thread turns carry author, timestamp and model information when available; older
+  turns with uncertain authorship are labelled rather than guessed.
+- Replies arriving while a card is open appear in its thread. Refreshed board styling
+  and compact Cockpit cards put the current state and latest result in view.
+- A run that returns while its background work is still active gets one continuation
+  before its final answer is posted.
+- Optional in-card terminals keep their sessions separate between workspaces and
+  prevent an agent from starting while you hold the terminal. They require local
+  `tmux` and `ttyd`; ordinary board use does not.
+- Process stages distinguish merged, deployed and seen live. Board integrity checks,
+  thread search and command-line helpers include reliability fixes.
+- Codex runs find the CLI again after the ChatGPT app moved it (October 2026), and a
+  signed-out Claude no longer blocks an authenticated Codex.
+- Existing workspaces keep their cards, threads and locally edited starter skills.
+  Model access still comes from your configured coding-agent CLI.
+- Jev review, reply suggestions and automatic thread-cut advice remain experimental
+  and are not bundled. Core use requires none of their modules or credentials.
+
 ## [0.3.0] — 2026-09-05 · the write edge, documented — and the board stand of September 4
 
 - README now says in its first lines who Superboard is for (people already running

@@ -35,6 +35,7 @@ from urllib.parse import unquote, urlsplit
 
 import board_lint  # Round-Trip-Diagnose: WELCHE Zeilen ein Save vernichten würde (28.07.)
 import sidecar  # geteilte Auslagerungs-Logik langer Faden-Turns — board.md-Diät 2026-07-16
+import provenance
 
 import config as _cfg  # Instanz-Config (Name, Identitaeten) - siehe config.py
 import paths as _p  # die EINE Pfad-Herleitung (vorher 9 unabhaengige Kopien)
@@ -48,7 +49,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.23.0"
+VERSION = "6.24.0"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -296,13 +297,17 @@ DUE_RE = re.compile(r"\s*!\((\d{4}-\d{2}-\d{2})\)")
 # @stage: = Prozess-Stufen-Historie (append-only wie thread, NICHT Singleton — Q3,
 # stage-tags-PLAN.md): eine Zeile pro erreichter Stufe, letzte Zeile = aktueller Stand.
 #   @stage: <stufe>[ · <repo-pfad-oder-notiz>] [*(YYYY-MM-DD)*]
-# Vokabular (7 Stufen, Q2): plan → rfc → approved → wip → review → tested → deployed.
+# Vokabular (9 Stufen, Q2 + Erweiterung 2026-09-07): plan → rfc → approved → wip → review
+# → tested → merged → deployed → live. `merged` = PR auf main; `deployed` = läuft auf einer
+# benannten Umgebung (Notiz sagt welcher); `live` = auf Produktion gesehen/verifiziert.
+# Grund (the owner, Faden a290d8d11160): „deployed" wirkte wie die höchste Stufe, obwohl der
+# PR noch offen war — ohne Merge ist ein Branch-Deploy nicht dauerhaft live.
 # `skip:`-Präfix in der Notiz markiert bewusstes Überspringen einer Stufe.
 # Failsafe (Design-Prinzip 1): eine Zeile OHNE Stufenwert (`@stage:` leer) ist keine
 # Malformung, die crasht oder verschwindet — sie fällt einfach durch zur normalen
 # Body-Zeile (siehe _parse_stage). Unbekannte Stufennamen werden geparst, `known: False`.
 STAGE_RE = re.compile(r"^\s+@stage:\s?(.*)$")
-STAGE_VOCAB = ("plan", "rfc", "approved", "wip", "review", "tested", "deployed")
+STAGE_VOCAB = ("plan", "rfc", "approved", "wip", "review", "tested", "merged", "deployed", "live")
 # Kein STAGE_LINE_RE-Multiline-Zwilling wie bei den anderen lost-Guards (WAIT_LINE_RE
 # & Co.): `\s?` nach dem Tag matcht auch `\n`, und ein `(?m)^...\s?(.*)$` über den
 # GANZEN Rohtext gefahren frisst dann bei einer leeren `@stage:`-Zeile den Zeilenumbruch
@@ -383,16 +388,55 @@ def _parse_stage(raw: str) -> dict | None:
             "date": stage_date, "known": stage in STAGE_VOCAB, "text": text}
 
 
+def _capture_author(payload: dict, default: str = "human") -> str:
+    value = payload.get("by", default)
+    if not isinstance(value, str) or value.strip().lower() not in ("human", "agent", "system", "unknown"):
+        raise ValueError("by must be human, agent, system or unknown")
+    return value.strip().lower()
+
+
+def authored_turn(board_path: Path, item: dict, text: str, kind: str, author: str,
+                  model: str | None = None) -> dict:
+    event = provenance.new_turn(kind, text, author)
+    if model:
+        event["model"] = model  # vor dem Sidecar-Write, damit auch dessen Meta-Zeile es trägt
+    event["text"] = re.sub(r"\s*\n+\s*", " · ", sidecar.inline_turn(
+        item["id"], item.get("title", ""), text, board_path.parent / "gc-threads",
+        kind=kind, metadata=event).strip())
+    return event
+
+
+def preserve_turn_provenance(disk: dict, proposed: dict) -> None:
+    """Retained items preserve their exact turn history; only appends are allowed."""
+    originals = item_index(disk)
+    for _, _, _, item in _all_items(proposed):
+        old = originals.get(item.get("id", ""), {}).get("thread", [])
+        turns = item.get("thread", [])
+        if len(turns) < len(old):
+            raise ValueError("thread history is append-only; reload the board")
+        for previous, event in zip(old, turns):
+            if (previous["kind"], previous["text"]) != (event.get("kind"), event.get("text")):
+                raise ValueError("thread history is append-only; reload the board")
+            for key in ("author", "turn_id", "source", "turn_at", "model"):
+                if key in event and event[key] != previous.get(key):
+                    raise ValueError("existing provenance is immutable; use provenance correction")
+                if key in previous:
+                    event[key] = previous[key]
+        ids = [event["turn_id"] for event in turns if event.get("turn_id")]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate turn ids; reload the board")
+
+
 def _thread_event(line: str) -> dict | None:
     """Ordnet eine eingerückte @gc*-Zeile einem Faden-Event zu (exakte Tags)."""
     if m := GC_DONE_RE.match(line):
-        return {"kind": "done", "text": m.group(1)}
+        return {"kind": "done", **provenance.decode(m.group(1))}
     if m := GC_REPLY_RE.match(line):
-        return {"kind": "reply", "text": m.group(1)}
+        return {"kind": "reply", **provenance.decode(m.group(1))}
     if m := GC_ASK_RE.match(line):
-        return {"kind": "ask", "text": m.group(1)}
+        return {"kind": "ask", **provenance.decode(m.group(1))}
     if m := GC_SYS_RE.match(line):
-        return {"kind": "sys", "text": m.group(1)}
+        return {"kind": "sys", **provenance.decode(m.group(1))}
     return None
 
 
@@ -635,7 +679,7 @@ def item_lines(it: dict) -> list[str]:
     if it.get("on"):
         out.append(f"  @on: {it['on']}")
     for ev in it.get("thread", []):
-        out.append(f"  {GC_TAG[ev['kind']]} {ev.get('text', '')}".rstrip())
+        out.append(f"  {GC_TAG[ev['kind']]} {provenance.encode(ev)}".rstrip())
     if it.get("session"):
         out.append(f"  @gc-session: {it['session']}")
     if it.get("sessions"):
@@ -840,6 +884,22 @@ def item_awaiting_cut(item: dict) -> bool:
     return not gc_runner.session_cut(t)
 
 
+def item_failed(item: dict) -> bool:
+    """Endete die letzte Runde mit einem ❌ (Abbruch, Stillstand, Runner-Crash)?
+
+    Kartenzustand „fail" (the owner 22.09., Blatt cockpit-karten-kompakt Q2=A: Auto-Karten werden
+    nur bei Fehler oder Input laut). Abgeleitet wie needs_input — nur der LETZTE Nicht-sys-
+    Turn zählt, und nur wenn er eine Agenten-Antwort ist: sobald the owner antwortet oder ✓
+    abhakt, ist der Zustand von selbst weg. ⏹ (selbst gestoppt) zählt bewusst NICHT als
+    Fehler (gc_runner.fail_stamp)."""
+    t = [e for e in item.get("thread", []) if e.get("kind") != "sys"]
+    if not t or t[-1].get("kind") != "reply":
+        return False
+    text = t[-1].get("text", "")
+    text = sidecar.expand(text) or text
+    return text.lstrip().startswith("❌")
+
+
 def annotate_sheets(board: dict) -> None:
     """Anzeige-Feld, KEIN board.md-Inhalt: wird nur in die /api/board-Antwort gehängt.
     parse_board bleibt rein (Round-Trip-Invariante), item_lines ignoriert die Zusatzkeys."""
@@ -848,6 +908,7 @@ def annotate_sheets(board: dict) -> None:
         it["sheet_kind"] = sheet_kind(it["sheet"])
         it["needs_input"] = item_needs_input(it)
         it["awaiting_cut"] = item_awaiting_cut(it)
+        it["failed"] = item_failed(it)
 
 
 def _believable(stamps: list[str | None]) -> list[str | None]:
@@ -884,7 +945,7 @@ def _believable(stamps: list[str | None]) -> list[str | None]:
     return [s if i in keep else None for i, s in enumerate(stamps)]
 
 
-def annotate_turn_times(board: dict) -> None:
+def annotate_turn_times(board: dict, threads_dir: Path | None = None) -> None:
     """Anzeige-Feld `at` pro Faden-Turn, KEIN board.md-Inhalt (wie annotate_sheets).
 
     Der Faden liest sich wie ein Chat, hatte aber keine Uhrzeit — man sah nicht, ob
@@ -892,15 +953,22 @@ def annotate_turn_times(board: dict) -> None:
     im Nachhinein, warum ein Run kalt startete: die Cache-Pill zeigt nur den JETZT-
     Zustand, die Historie war blind (2026-08-13).
 
-    Quelle ist der Sidecar-Dateiname, kein neues Feld: dadurch gilt die Zeit rückwirkend
-    für den gesamten Bestand und die Zeilen-Serialisierung bleibt unberührt. Preis der
-    Ehrlichkeit: kurze Turns ohne Sidecar bleiben ohne Zeit.
+    Quellen: seit 2026-09-24 das gc-meta-Feld `at`, das jeder neue Turn beim Schreiben
+    bekommt (`turn_at`); für den Altbestand davor der Sidecar-Dateiname. Alte kurze
+    Turns ohne Sidecar bleiben ohne Zeit — geschätzt wird nicht. Kurze Turns ohne
+    eigene Zeit waren der Grund, warum die Uhrzeit im Faden mal da war und mal nicht
+    (Faden cf2357146820).
     """
-    for _, _, _, it in _all_items(board):
-        thread = it.get("thread", [])
-        for ev, at in zip(thread, _believable([sidecar.turn_time(e.get("text", "")) for e in thread])):
-            if at:
-                ev["at"] = at
+    with provenance.resolution_batch(threads_dir or sidecar.SIDECAR_DIR):
+        for _, _, _, it in _all_items(board):
+            thread = it.get("thread", [])
+            # Seit 24.09. trägt jeder neue Turn seine Zeit selbst (gc-meta `at`); der
+            # Sidecar-Name bleibt die Quelle für den Altbestand davor.
+            stamps = [e.get("turn_at") or sidecar.turn_time(e.get("text", "")) for e in thread]
+            for ev, at in zip(thread, _believable(stamps)):
+                ev["resolved_author"] = provenance.resolve(ev, threads_dir)
+                if at:
+                    ev["at"] = at
 
 
 def _claude_cross_run(rec: dict) -> dict | None:
@@ -1555,8 +1623,8 @@ def rollup_child_completions(board: dict, now: datetime | None = None) -> int:
             continue
         stamp = now.strftime("%Y-%m-%d %H:%M")
         par.setdefault("thread", []).append(
-            {"kind": "sys", "text": f"✓ Sub erledigt: {it.get('title', '')} [sub:{cid}] · "
-                                    f"{_child_result(it)} *({stamp})*"})
+            provenance.new_turn("sys", f"✓ Sub erledigt: {it.get('title', '')} [sub:{cid}] · "
+                                f"{_child_result(it)} *({stamp})*", "system"))
         written += 1
     return written
 
@@ -1713,6 +1781,15 @@ def _opencode_row(ev: dict) -> dict | None:
         tokens = tokens if isinstance(tokens, dict) else {}
         total = tokens.get("total")
         detail = f" · {total} tokens" if total is not None else ""
+        # OpenCode reports cache reads per model cycle. Show that measurement where the owner
+        # is already watching the cycle finish instead of keeping it only in usage-log.
+        try:
+            cache_read = int((tokens.get("cache") or {}).get("read") or 0)
+            fresh = int(tokens.get("input") or 0)
+        except (TypeError, ValueError, AttributeError):
+            cache_read = fresh = 0
+        if cache_read or fresh:
+            detail += f" · {round(100 * cache_read / (cache_read + fresh))}% cache"
         return {"kind": "result", "text": f"Step finished{detail}"}
     return None
 
@@ -1858,7 +1935,8 @@ def killed_today(journal_dir: Path | None = None) -> list[dict]:
                     row = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if str(row.get("ts", "")).startswith(today):
+                # ⚡ Restart now stoppt absichtlich und setzt fort — kein Abbruch fürs Banner.
+                if str(row.get("ts", "")).startswith(today) and row.get("reason") != "restart":
                     rows.append({k: row.get(k) for k in
                                  ("ts", "gc_id", "title", "reason", "elapsed_min", "last_tool")})
         except OSError:
@@ -2005,7 +2083,7 @@ def _public_beats() -> dict:
             for k, v in BEATS.items()}
 
 
-def request_stop(gc_id: str) -> str:
+def request_stop(gc_id: str, reason: str = "stop") -> str:
     """Stopp-Wunsch für einen laufenden Run hinterlegen. Gibt "" zurück, wenn es
     geklappt hat, sonst den Grund. Der eigentliche Kill passiert in gc_runner.watch_run
     — die kennt dann den Grund und schreibt „⏹ von dir gestoppt" statt „Absturz"."""
@@ -2022,7 +2100,7 @@ def request_stop(gc_id: str) -> str:
     if not stop_path:
         return "The run is just starting — wait a few seconds and try again"
     try:
-        Path(stop_path).write_text(f"stop {time.time()}")
+        Path(stop_path).write_text(f"{reason} {time.time()}")
     except OSError as e:
         return f"Cannot write stop marker: {e}"
     return ""
@@ -2031,9 +2109,46 @@ def request_stop(gc_id: str) -> str:
 # Der Neustart selbst wird hier NICHT ausgeloest — ein installiertes Paket startet
 # ueber seinen eigenen Prozess neu, nicht ueber ein Skript im Repo. Der Waechter
 # bleibt trotzdem: laeuft ein Neustart von aussen, darf kein neuer Run mehr starten.
-RESTART_LOCK = Path("/tmp/board-restart.lock")
-RESTART_DRAIN_MAX = 45 * 60   # s — länger als das MAX_WAIT des Wächters ⇒ Lock ist verwaist
+RESTART_LOCK = _p.DATA / "restart.lock"
+RESTART_LOCK_MAX_AGE = 60 * 60   # s — Deckel gegen PID-Recycling; ein echter Wächter lebt
+                                 # max. ~41 min (MAX_WAIT 40 min + Gnadenfrist + Tausch)
+RESTART_LOCK_NOPID_GRACE = 15    # s — Fenster zwischen mkdir und dem Schreiben der PID
 RESTART_DRAIN_MSG = "Board restart in progress — the item exists; press ▶ again after the restart"
+
+
+def restart_lock_held() -> bool:
+    """Hält gerade ein LEBENDER Wächter das Neustart-Lock?
+
+    Das Lock ist ein Verzeichnis (atomares mkdir); der Halter legt seine PID als
+    <lock>/pid daneben. Ein bloßes „Verzeichnis existiert" reicht nicht als Antwort:
+    Stirbt der Wächter hart, läuft sein EXIT-Trap nie und das Lock bleibt für immer
+    liegen. Genau das ist am 20.09. passiert — der Wächter starb nach 70 s, und ab da
+    beantwortete das Board JEDEN Neustart-Klick mit „Restart is already in progress",
+    während der Header dauerhaft „veraltet" zeigte (the owner 21.09.).
+
+    Reihenfolge: kein Lock → nein. Älter als RESTART_LOCK_MAX_AGE → nein (eine recycelte
+    PID darf nicht ewig blockieren). PID-Datei da → lebt der Prozess? Noch keine PID-Datei
+    → nur in den ersten RESTART_LOCK_NOPID_GRACE Sekunden als frisch zählen.
+    Dieselbe Regel steht in restart-server.sh (lock_owner_alive); aufgeräumt wird das
+    verwaiste Lock NUR dort — ein zweiter Aufräumer hier könnte ein gerade frisch
+    angelegtes Lock wegräumen (Review gpt-5.6-sol, 21.09.)."""
+    try:
+        age = time.time() - RESTART_LOCK.stat().st_mtime
+    except OSError:
+        return False
+    if age >= RESTART_LOCK_MAX_AGE:
+        return False
+    try:
+        pid = int((RESTART_LOCK / "pid").read_text().strip())
+    except (OSError, ValueError):
+        return age < RESTART_LOCK_NOPID_GRACE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True              # existiert, gehört nur jemand anderem
+    return True
 
 
 def restart_draining() -> bool:
@@ -2045,12 +2160,48 @@ def restart_draining() -> bool:
     Board-Tag laufend neue Runs nach — der Wächter verhungert und läuft in sein MAX_WAIT.
 
     Ein verwaistes Lock (Wächter gestorben, rmdir nie gelaufen) blockiert nicht ewig:
-    älter als RESTART_DRAIN_MAX wird ignoriert."""
+    siehe restart_lock_held()."""
+    return restart_lock_held()
+
+
+TERMINAL_HOLDS_MSG = ("The board terminal holds this item's session — finish there and press "
+                      "Return to board before starting a run")
+TERMINAL_HANDOFF_ASK = (
+    "Terminal returned to the board. Summarize what was completed in the terminal, "
+    "the verified current state, files or commits changed, and the next unresolved step "
+    "in this thread. Do not redo completed work."
+)
+
+
+def terminal_held_items() -> list[str]:
+    """Alle Items, deren Session gerade ein Board-Terminal hält — für die Karten-Pill und
+    das automatische Wiederöffnen des Panels (owner feedback: „wenn ich das Item wieder
+    öffne, sehe ich nicht, dass da ein Terminal läuft"). Läuft im 5-s-Poll mit, deshalb
+    fail-open und billig (ein `tmux list-sessions`)."""
     try:
-        age = time.time() - RESTART_LOCK.stat().st_mtime
-    except OSError:
+        import terminal
+        return sorted(terminal.held_items())
+    except Exception:
+        return []
+
+
+def terminal_holds(gc_id: str) -> bool:
+    """Besitzregel des schreibbaren Terminals (terminal.py): lebt `gcterm-<id>`, gehört die
+    Session dem Terminal, nicht dem Runner. Fail-open: ohne tmux/Modul hält niemand etwas."""
+    try:
+        import terminal
+        return terminal.holds_session(gc_id)
+    except Exception:
         return False
-    return age < RESTART_DRAIN_MAX
+
+
+def terminal_input_states() -> dict:
+    """Confirmed runner requests, independent of terminal ownership or silence."""
+    try:
+        import terminal
+        return terminal.input_states()
+    except Exception:
+        return {}
 
 
 def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
@@ -2062,12 +2213,10 @@ def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
     auch bei Crash."""
     import gc_runner
     gc_id = pending["addr"]["id"]
-    if restart_draining():
-        if semaphore:
-            semaphore.release()
-        return False
     with RUN_LOCK:
-        if gc_id in RUNNING:
+        # Terminal creation and runner reservation share this lock; neither may
+        # claim the same resumable session between the other's check and write.
+        if restart_draining() or terminal_holds(gc_id) or gc_id in RUNNING:
             if semaphore:
                 semaphore.release()
             return False
@@ -2075,7 +2224,7 @@ def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
         BEATS[gc_id] = {"steps": 0, "last_tool": "", "session_id": "", "rate_limit": "",
                         "last_event": time.time(), "stop_path": "",
                         "runner": gc_runner.runner_of(model), "run_mode": run_mode,
-                        "cap_seconds": timeout}
+                        "cap_seconds": timeout, "model": model}
 
     # The policy travels with the run snapshot and into its durable journal/prompt. It is
     # deliberately not written to board.md: long mode is a consumed launch action, not item state.
@@ -2408,10 +2557,12 @@ def finished_recent(minutes: int = 60, now: datetime | None = None) -> list[dict
         # this the header only carried cost, and a 2M-token run looked like nothing there.
         tok = sum(v for v in (rec.get("input_tokens"), rec.get("cache_read"),
                               rec.get("cache_creation")) if isinstance(v, (int, float)))
+        cache_hit = rec.get("cache_hit_pct")
         out.append({"id": rec.get("gc_id", ""), "title": rec.get("title", "") or "(no title)",
                     "model": rec.get("model", ""), "ok": bool(rec.get("ok")),
                     "cost": round(cost, 2) if isinstance(cost, (int, float)) else None,
                     "tok": int(tok) or None,
+                    "cache_hit": int(cache_hit) if isinstance(cache_hit, (int, float)) else None,
                     "ms": rec.get("duration_ms") or 0,
                     "ago": int((now - ts).total_seconds())})
     out.sort(key=lambda r: r["ago"])
@@ -2458,6 +2609,22 @@ def runner_status(root: Path | None = None) -> tuple[str, str]:
         )
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         return "unknown", "Claude Code is installed; authentication could not be verified."
+
+
+def codex_runner_status() -> tuple[str, str]:
+    """Check the selected Codex CLI without inspecting its credential files."""
+    import gc_runner
+    command = gc_runner.codex_cmd()
+    if not (Path(command).is_file() or shutil.which(command)):
+        return "missing", "Codex CLI not found — install the supported Codex runner first."
+    try:
+        result = subprocess.run([command, "login", "status"], capture_output=True,
+                                text=True, timeout=5, check=False)
+        if result.returncode == 0:
+            return "ready", "Codex is installed and authenticated."
+        return "login", "Codex is installed but not authenticated — run its login command first."
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown", "Codex is installed; authentication could not be verified."
 
 
 DOC_SOURCES = {
@@ -3197,7 +3364,7 @@ def _wesen_trend(state: str, jetzt_now: int, today: date) -> str:
 # Pflicht-Rituale (Konzept: design-proposals/heute-zone-konzept.md, Baufreigabe 21.07.,
 # v0.12.0). KEINE board.md-Items — Definition in rituale.json (Name/Rhythmus/Deadline/
 # Proof-Prompt), Tagesstatus + Proofs im append-only Journal journal/rituale.jsonl
-# (gitignored wie journal/ generell). "Kein Archiv-Spam" (Bens Sorge): eine Zeile pro
+# (gitignored wie journal/ generell). "Kein Archiv-Spam" (the owner’s Sorge): eine Zeile pro
 # Event (done/snooze/override), nicht pro Tag re-geschrieben.
 RITUALE_FILE = _p.RITUALS
 RITUAL_JOURNAL = _p.JOURNAL / "rituale.jsonl"
@@ -3750,7 +3917,7 @@ def run_cockpit_action(board_path: Path, key: str, base_url: str, claude_cmd: st
         # Weitertippen IM Faden resumt weiter wie bisher — der Schnitt hängt am ▶, nicht am Turn.
         _retire_session(item, item.get("session", ""), "")  # alte UUID vor dem Wipe in die Historie
         item["session"] = ""
-        item["thread"].append({"kind": "ask", "text": f"▶ Run {action['label']}"})
+        item["thread"].append(provenance.new_turn("ask", f"▶ Run {action['label']}", "system"))
         fd, tmp = tempfile.mkstemp(dir=board_path.parent, prefix=".board-")
         with os.fdopen(fd, "w") as f:
             f.write(serialize_board(board))
@@ -4177,7 +4344,7 @@ class Handler(BaseHTTPRequestHandler):
             board = parse_board(text)
             lost = lost_total(text, board)   # VOR annotate_sheets: die Guards zählen gegen den Rohtext
             annotate_sheets(board)
-            annotate_turn_times(board)
+            annotate_turn_times(board, self.board_path.parent / "gc-threads")
             annotate_cross_run_cache(board)
             with RUN_LOCK:
                 running, since, queued = sorted(RUNNING), dict(RUNNING), sorted(QUEUED)
@@ -4186,6 +4353,8 @@ class Handler(BaseHTTPRequestHandler):
             # from the folder name so a checkout is self-identifying without setup. The
             # header shows it small as a path handle next to the brand.
             self._json(200, {"board": board, "etag": text_etag(text),
+
+                             "provenance_rev": provenance.provenance_revision(self.board_path.parent / "gc-threads"),
                              "lost": lost, "version": current_version(),
                              "instance": GC_ROOT.name,
                              "night_pause_enabled": _cfg.NIGHT_PAUSE_ENABLED,
@@ -4194,7 +4363,9 @@ class Handler(BaseHTTPRequestHandler):
                              "running": running, "running_since": since, "queued": queued,
                              "compacting": compacting, "beats": beats,
                              "finished_recent": finished_recent(),
-                             "killed_today": killed_today()})
+                             "killed_today": killed_today(),
+                             "terminal_held": terminal_held_items(),
+                             "terminal_input": terminal_input_states()})
         elif self.path.startswith("/api/docs/"):
             name = self.path[len("/api/docs/"):].split("?", 1)[0]
             text = read_product_doc(name)
@@ -4207,7 +4378,10 @@ class Handler(BaseHTTPRequestHandler):
             # Claude Code installed must learn that from the board, not from a
             # scrollback line they never saw.
             state, message = runner_status()
-            self._json(200, {"state": state, "message": message})
+            codex_state, codex_message = codex_runner_status()
+            self._json(200, {"state": state, "message": message,
+                             "runners": {"claude": {"state": state, "message": message},
+                                         "codex": {"state": codex_state, "message": codex_message}}})
         elif self.path == "/api/gc-pending":
             text = self.board_path.read_text()
             board = parse_board(text)
@@ -4222,10 +4396,14 @@ class Handler(BaseHTTPRequestHandler):
             # pollt, /api/board aber nur bei echter Änderung — ohne das stünde die
             # Laufzeit-/Fortschrittsanzeige minutenlang still.
             self._json(200, {"etag": file_etag(self.board_path), "running": running,
+
+                             "provenance_rev": provenance.provenance_revision(self.board_path.parent / "gc-threads"),
                              "queued": queued, "compacting": compacting,
                              "running_since": since, "beats": beats,
                              "finished_recent": finished_recent(),
-                             "killed_today": killed_today()})
+                             "killed_today": killed_today(),
+                             "terminal_held": terminal_held_items(),
+                             "terminal_input": terminal_input_states()})
         elif self.path.startswith("/api/netcheck"):
             # Getriggert von der UI, sobald ein Run die 20-min-Schwelle reißt (s. netcheck()).
             self._json(200, netcheck(force=self.path.endswith("force=1")))
@@ -4344,6 +4522,12 @@ class Handler(BaseHTTPRequestHandler):
             # in einem fetch() der UI — eine externe URL wäre eine Exfiltrations-Kante.
             self._json(200, {"actions": [{**{k: a.get(k, "") for k in ("key", "label", "icon", "auth")},
                                           **({"status": a["status"]} if a.get("status") else {}),
+                                          # Card face (the owner 22.09., Blatt cockpit-karten-kompakt Q3=A):
+                                          # "state" (ok|warn|fail|needs-input) + "headline" (≤40 Zeichen)
+                                          # ersetzen den freien "status"-Text auf der Karte; der lange
+                                          # Stand lebt im Faden. "status" bleibt als Fallback durchgereicht.
+                                          **({"state": a["state"]} if a.get("state") else {}),
+                                          **({"headline": a["headline"]} if a.get("headline") else {}),
                                           **({"group": a["group"]} if a.get("group") else {}),
                                           **({"rhythm": a["rhythm"]} if a.get("rhythm") else {}),
                                           **({"schedule": a["schedule"]} if a.get("schedule") else {}),
@@ -4437,6 +4621,11 @@ class Handler(BaseHTTPRequestHandler):
                 # dem ein Hand-Edit die @gc-id-Zeile genommen hat, bekommt sie zurück
                 # statt still eine neue zu erben.
                 ensure_ids(payload["board"], sidecar.SIDECAR_DIR)
+                try:
+                    preserve_turn_provenance(disk, payload["board"])
+                    serialize_board(payload["board"])  # reject malformed client metadata before writing
+                except (ValueError, TypeError) as exc:
+                    return self._json(409, {"error": str(exc), "etag": text_etag(raw)})
                 drop_arbeitsstand_on_done(disk, payload["board"])  # abgehakt → Arbeitsspeicher weg
                 # Der Haken auf einem Sub ist der häufigste Erledigt-Pfad — der Roll-up
                 # hängt deshalb direkt am Whole-Board-Save (idempotent, keyed by Child-ID).
@@ -4510,46 +4699,110 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200 if ok else 409, {"ok": ok, "note": note, "archived": count})
 
     def _gc_terminal(self, payload: dict) -> None:
-        """Read-only-Terminal auf die Agenten-Session eines Items öffnen/schließen.
+        """Schreibbares Terminal auf die Agenten-Session eines Items öffnen/schließen/
+        zurückgeben (`action`: fehlt = öffnen, `close`, `release`, `status`).
 
         Die Ansicht ist ein RESUME-Terminal, kein Spiegel: sie startet
         `claude --resume <uuid>` (bzw. das Gegenstück des jeweiligen Runners) auf
-        derselben Session und rendert deren Historie. Ein gerade laufender Board-Run
-        wird davon nicht gespiegelt — und weil nur gelesen wird, auch nicht gestört.
+        derselben Session und rendert deren Historie. Seit 2026-09-06 tippt man dort
+        auch hinein; solange die tmux-Sitzung lebt, hält das Terminal die Session und
+        `launch_gc_run` verweigert Board-Runs auf dem Item (Besitzregel, terminal.py).
+        `release` gibt sie zurück — der Knopf „⏏ Return to board" im Panel.
 
         Der Server hält hier bewusst keinen Zustand: `terminal.py` kennt seinen
         einen Betrachter selbst (Zustandsdatei), damit ein Server-Neustart keinen
-        verwaisten ttyd hinterlässt, den niemand mehr zuordnen kann.
+        verwaisten ttyd hinterlässt, den niemand mehr zuordnen kann. Seit 2026-09-07
+        ist der Betrachter geteilt (ein ttyd, Sitzung per URL-Argument): jedes Item hat
+        sein eigenes Terminal, mehrere gleichzeitig sind normal, und `close` beendet
+        nur den Prozess — die UI ruft es beim Panel-Schließen nicht mehr.
         """
         import gc_runner                                  # lokal wie die übrigen Runner-Zugriffe
         import terminal
 
-        if (payload.get("action") or "") == "close":
+        action = (payload.get("action") or "").strip()
+        if action == "close":
             return self._json(200, terminal.close())
+        if action == "status":
+            try:
+                return self._json(200, {**terminal.status(), "held": terminal.held_items(),
+                                        "terminal_input": terminal_input_states()})
+            except Exception as exc:                      # ohne tmux: nichts gehalten
+                return self._json(200, {"open": False, "held": [], "error": str(exc)})
 
         gc_id = (payload.get("id") or "").strip()
         if not re.fullmatch(r"[0-9a-f]{6,32}", gc_id):
             return self._json(400, {"error": "bad id"})
-        # Live gefunden: der Knopf würde sonst ein `--resume` auf die Session legen, die
-        # der laufende Run gerade selbst schreibt. Lesen ist harmlos, aber zwei Prozesse
-        # auf einer Session-ID sind der gefährlichste Punkt des ganzen Vorhabens — und ab
-        # einem Schreibmodus wäre es ein zerlegter Verlauf. Also gar nicht erst anbieten.
-        if gc_id in RUNNING:
-            return self._json(409, {"error": "A run is active on this item — "
-                                             "watch the event stream instead"})
-        board = parse_board(self.board_path.read_text())
-        hit = next((it for _s, _n, _c, it in _all_items(board) if it.get("id") == gc_id), None)
-        if hit is None:
-            return self._json(409, {"error": "item not found"})
-        session = (hit.get("session") or "").strip()
-        handle = gc_runner.session_uuid(session)          # nicht `uuid` — Modulname
-        if not handle:
-            return self._json(409, {"error": "This item has no agent session yet"})
-        try:
-            return self._json(200, terminal.open_terminal(
-                gc_id, gc_runner.session_runner(session), handle))
-        except terminal.TerminalError as exc:
-            return self._json(503, {"error": str(exc)})
+        if action == "seen":
+            request_id = payload.get("request_id")
+            if not isinstance(request_id, str) or len(request_id) > 256:
+                return self._json(400, {"error": "bad request id"})
+            terminal.acknowledge(gc_id, request_id)
+            return self._json(200, {"terminal_input": terminal_input_states()})
+        if action == "release":
+            model = (payload.get("model") or "").strip()
+            handoff = payload.get("handoff") is True
+            if handoff and model not in MODEL_CHOICES:
+                return self._json(400, {"error": "model must be one of: "
+                                                 + ", ".join(m or "default" for m in MODEL_CHOICES)})
+            if not handoff:
+                return self._json(200, terminal.release(gc_id))
+
+            # Returning ownership is now a real handoff, not just an unlock: append a
+            # transparent System turn and resume the same agent once so the terminal-only
+            # work becomes durable thread context. Keep the board write and release under
+            # one lock; otherwise a concurrent edit could land between the handoff snapshot
+            # and the run that consumes it.
+            with board_write_guard(self.board_path):
+                raw = self.board_path.read_text()
+                board = parse_board(raw)
+                if lost_total(raw, board) > 0:
+                    return self._json(409, {"error": "The board has unparsed lines — "
+                                                    "terminal handoff blocked"})
+                hit = next(((s, n, c, it) for s, n, c, it in _all_items(board)
+                            if it.get("id") == gc_id), None)
+                if hit is None:
+                    return self._json(409, {"error": "item not found"})
+                s, n, c, it = hit
+                if (it.get("thread") or []) and it["thread"][-1].get("text") == TERMINAL_HANDOFF_ASK:
+                    return self._json(409, {"error": "Terminal handoff is already queued"})
+                released = terminal.release(gc_id)
+                it.setdefault("thread", []).append(
+                    authored_turn(self.board_path, it, TERMINAL_HANDOFF_ASK, "ask", "system")
+                )
+                self._atomic_write(serialize_board(board))
+                pending = pending_entry(s, n, c, it, board)
+
+            base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
+            import gc_runner
+            if not launch_gc_run(pending, base_url, claude_binary(), gc_runner.DEFAULT_TIMEOUT,
+                                 model=model):
+                return self._json(200, {**released, "handoff_started": False,
+                                        "message": RESTART_DRAIN_MSG if restart_draining()
+                                        else "Terminal returned; handoff queued — press ▶ Agent"})
+            return self._json(202, {**released, "handoff_started": True})
+        if action:
+            return self._json(400, {"error": f"unknown action: {action}"})
+        with RUN_LOCK:
+            # Live gefunden: der Knopf würde sonst ein `--resume` auf die Session legen, die
+            # der laufende Run gerade selbst schreibt. Lesen ist harmlos, aber zwei Prozesse
+            # auf einer Session-ID sind der gefährlichste Punkt des ganzen Vorhabens — und ab
+            # einem Schreibmodus wäre es ein zerlegter Verlauf. Also gar nicht erst anbieten.
+            if gc_id in RUNNING:
+                return self._json(409, {"error": "A run is active on this item — "
+                                                 "watch the event stream instead"})
+            board = parse_board(self.board_path.read_text())
+            hit = next((it for _s, _n, _c, it in _all_items(board) if it.get("id") == gc_id), None)
+            if hit is None:
+                return self._json(409, {"error": "item not found"})
+            session = (hit.get("session") or "").strip()
+            handle = gc_runner.session_uuid(session)          # nicht `uuid` — Modulname
+            if not handle:
+                return self._json(409, {"error": "This item has no agent session yet"})
+            try:
+                return self._json(200, terminal.open_terminal(
+                    gc_id, gc_runner.session_runner(session), handle))
+            except terminal.TerminalError as exc:
+                return self._json(503, {"error": str(exc)})
 
     def _gc_stop(self, payload: dict) -> None:
         """Des Owners „esc" (2026-07-27): laufenden Agent-Run abbrechen.
@@ -4571,7 +4824,7 @@ class Handler(BaseHTTPRequestHandler):
     def _ritual_done(self, payload: dict) -> None:
         """Ritual abhaken (Füttern): Proof-Pflichtfeld + Journal-Append; bei
         `persist_personal` zusätzlich append-only in die Ziel-Datei (NIE überschreiben —
-        die Datei existiert bereits, z.B. die Therapie-Ablage der Reflection).
+        die Datei existiert bereits, z.B. die persönliche Ablage der Reflection).
         proof-kind "none": Server kanonisiert den Proof-Text selbst statt
         dem Client zu vertrauen — ein Client kann so weder beliebigen Text einschleusen noch
         von der Konstante abweichen. Zusätzlich idempotent: ein zweites done im selben Zyklus
@@ -4678,7 +4931,17 @@ class Handler(BaseHTTPRequestHandler):
         # falsely mark the open ask as answered.
         if requested_kind not in ("ask", "reply", "done", "sys", "radar"):
             return self._json(400, {"error": "bad kind"})
+        try:
+            author = _capture_author(payload, "human" if requested_kind in ("ask", "done")
+                                     else "system" if requested_kind == "sys" else "agent")
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)})
         raw_text = (payload.get("text") or "").strip()
+        source = payload.get("source")
+        if source is not None:
+            reference = sidecar.REF_RE.search(raw_text)
+            if not isinstance(source, str) or not reference or source != reference.group(1):
+                return self._json(400, {"error": "source must match the explicit sidecar reference"})
         addr = payload.get("addr") or {}
         with board_write_guard(self.board_path):
             raw = self.board_path.read_text()
@@ -4721,10 +4984,18 @@ class Handler(BaseHTTPRequestHandler):
             # inline_turn ein No-op; die ·-Normalisierung bleibt als Gürtel — Faden-Events
             # sind Markdown-EINZEILER, eingebettete Umbrüche würden beim nächsten Parse
             # als ungetaggte Zeilen still verworfen.
-            text = re.sub(r"\s*\n+\s*", " · ",
-                          sidecar.inline_turn(it["id"], it.get("title", ""), raw_text,
-                                              self.board_path.parent / "gc-threads", kind=kind).strip())
-            it["thread"].append({"kind": kind, "text": text})
+            # Welches Modell geantwortet hat (Faden cf2357146820): nur für Agent-Antworten,
+            # und ein unbrauchbarer Wert kostet nie den Turn — dann eben ohne Modell.
+            model = payload.get("model") if kind == "reply" and author == "agent" else None
+            try:
+                model = provenance.turn_model(model) if model else None
+            except ValueError:
+                model = None
+            event = authored_turn(self.board_path, it, raw_text, kind, author, model)
+            if source is not None:
+                event["source"] = source
+            text = event["text"]
+            it["thread"].append(event)
             if session := (payload.get("session") or "").strip():
                 _retire_session(it, it.get("session", ""), session)  # alte UUID vor dem Überschreiben sichern
                 it["session"] = session  # Resume-Pointer, im selben atomaren Write
@@ -4764,8 +5035,9 @@ class Handler(BaseHTTPRequestHandler):
         has_body = "body" in payload
         has_stage = "stage" in payload
         has_parent = "parent" in payload
-        if not has_body and not has_stage and not has_parent:
-            return self._json(400, {"error": "body, stage or parent is required"})
+        has_move = "move" in payload
+        if not has_body and not has_stage and not has_parent and not has_move:
+            return self._json(400, {"error": "body, stage, parent or move is required"})
 
         body: list[str] | None = None
         expected_body_etag = ""
@@ -4813,10 +5085,37 @@ class Handler(BaseHTTPRequestHandler):
             if parent.lower().startswith("@gc-parent:"):
                 return self._json(400, {"error": "parent is the bare @gc-id, not the tag line"})
 
+        move: tuple[str, str] | None = None
+        if has_move:
+            # Karte in eine andere Thema/Spalte legen — das Gegenstück zum Drag in der UI.
+            # Nach --parent blieb genau das der letzte Item-Schreibvorgang ohne API:
+            # ein Umhängen wechselt nicht die Spalte, und der Hand-Splice wurde vom
+            # Headless-Classifier geblockt (Faden 2128f6b7d172, 04.09.).
+            raw_move = payload.get("move")
+            if not isinstance(raw_move, str) or "/" not in raw_move:
+                return self._json(400, {"error": "move must be '<Theme>/<Column>', e.g. 'Dev (Board)/Now'"})
+            theme_name, _, col_name = raw_move.rpartition("/")
+            col_key = column_key(col_name)
+            if not theme_name.strip() or col_key is None:
+                return self._json(400, {"error": f"move: unknown column '{col_name.strip()}' "
+                                                 f"(one of {', '.join(COLUMN_FILE_NAMES.values())})"})
+            move = (theme_name.strip(), col_key)
+
         with board_write_guard(self.board_path):
             raw = self.board_path.read_text()
             board = parse_board(raw)
             canonical = serialize_board(board) == raw
+            if move is not None:
+                target_theme = next((th for th in board["themes"] if th["name"] == move[0]), None)
+                if target_theme is None:
+                    return self._json(404, {"error": f"No theme '{move[0]}'",
+                                            "themes": [th["name"] for th in board["themes"]]})
+                if not canonical:
+                    # Ein Move berührt zwei Stellen der Datei; der chirurgische Block-Splice
+                    # unten kann das nicht. Lieber ehrlich ablehnen als Handtext umsortieren.
+                    return self._json(409, {"error": "board.md is not canonical — move needs a whole-board "
+                                                     "write; drag the card in the UI instead",
+                                            "etag": text_etag(raw)})
             found = locate_item_block(raw, addr)
             if found is None:
                 return self._json(409, {"error": "item not uniquely found", "matches": 0,
@@ -4873,6 +5172,26 @@ class Handler(BaseHTTPRequestHandler):
             if parent is not None and parent != (it.get("parent") or ""):
                 it["parent"] = parent  # "" = Top-Level; der Parser hält den Key immer
                 changed = True
+            if move is not None:
+                src = next(((th, c) for th, c in _all_cols(board) if it in th["cols"][c]), None)
+                if src is None:
+                    return self._json(409, {"error": "move: item is not in a theme column "
+                                                     "(staging/cockpit/person items cannot be moved this way)"})
+                dst_theme = next(th for th in board["themes"] if th["name"] == move[0])
+                dst_col = dst_theme["cols"].setdefault(move[1], [])
+                if src != (dst_theme, move[1]):
+                    src[0]["cols"][src[1]].remove(it)
+                    # Einreihen: hinter das letzte Item mit demselben Dach in der Zielspalte
+                    # (Subs bleiben bei ihren Geschwistern), sonst ans Ende der Spalte.
+                    pid = (it.get("parent") or "").strip()
+                    pos = len(dst_col)
+                    if pid:
+                        sib = [i for i, x in enumerate(dst_col)
+                               if (x.get("parent") or "").strip() == pid or x.get("id") == pid]
+                        if sib:
+                            pos = sib[-1] + 1
+                    dst_col.insert(pos, it)
+                    changed = True
 
             # The proposed body may not smuggle in a format meta line. Example: a
             # body line "@gc-id: ..." would become an attribute on the next parse
@@ -4905,10 +5224,10 @@ class Handler(BaseHTTPRequestHandler):
         title = (payload.get("title") or "").strip()
         parent_id = (payload.get("parent_id") or payload.get("parent") or "").strip()
         ask = (payload.get("ask") or "").strip()
-        # `by: agent` = der Auftrag stammt vom Agenten (Runner-curl), nicht aus dem Feld des
-        # Owners: Sidecar-Kopf `# Agent brief:` statt `# <Owner> turn:`, damit spaetere
-        # Auswertungen die Datei nicht als Owner-Quelle lesen. Faden-Art bleibt "ask".
-        sidecar_kind = "brief" if (payload.get("by") or "").strip().lower() == "agent" else "ask"
+        try:
+            author = _capture_author(payload)
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)})
         if not title or not parent_id:
             return self._json(400, {"error": "title and parent_id are required"})
         with board_write_guard(self.board_path):
@@ -4944,10 +5263,7 @@ class Handler(BaseHTTPRequestHandler):
             child["id"] = _new_id({x["id"] for _s, _n, _c, x in _all_items(board) if x.get("id")})
             child["parent"] = parent_id
             if ask:
-                child["thread"].append({"kind": "ask", "text": re.sub(
-                    r"\s*\n+\s*", " · ",
-                    sidecar.inline_turn(child["id"], title, ask,
-                                        self.board_path.parent / "gc-threads", kind=sidecar_kind).strip())})
+                child["thread"].append(authored_turn(self.board_path, child, ask, "ask", author))
             target.insert(pos + 1, child)
             self._atomic_write(serialize_board(board))
             return self._json(200, {"ok": True, "id": child["id"], "parent": parent_id,
@@ -5003,6 +5319,7 @@ class Handler(BaseHTTPRequestHandler):
             # an: „läuft schon" (nichts tun) vs. Neustart-Drain (nach dem Tausch nochmal
             # drücken). Dasselbe Muster wie beim Action-Start (s. run_cockpit_action).
             return self._json(409, {"error": RESTART_DRAIN_MSG if restart_draining()
+                                    else TERMINAL_HOLDS_MSG if terminal_holds(gc_id)
                                     else "A run for this item is already in progress"})
         return self._json(202, {"ok": True, "id": gc_id, "model": model or "default",
                                 "run_mode": run_mode, "timeout": timeout})
@@ -5034,6 +5351,8 @@ class Handler(BaseHTTPRequestHandler):
             # Sending the Claude command through a different CLI would at best be a normal chat
             # turn and at worst mutate the wrong session, so fail visibly until it is measured.
             return self._json(409, {"error": "Codex session compaction is not supported yet"})
+        if terminal_holds(gc_id):
+            return self._json(409, {"error": TERMINAL_HOLDS_MSG})
         with RUN_LOCK:
             if gc_id in RUNNING or gc_id in QUEUED:
                 return self._json(409, {"error": "A run for this item is already in progress"})
@@ -5171,10 +5490,7 @@ class Handler(BaseHTTPRequestHandler):
                 item["id"] = _new_id({x["id"] for _s, _n, _c, x in _all_items(board) if x.get("id")})
                 item["body"] = [marker, "···", self.CHAT_MISSION]
                 board.setdefault("cockpit", []).append(item)
-            turn = re.sub(r"\s*\n+\s*", " · ",
-                          sidecar.inline_turn(item["id"], item["title"], text,
-                                              self.board_path.parent / "gc-threads", kind="ask").strip())
-            item["thread"].append({"kind": "ask", "text": turn})
+            item["thread"].append(authored_turn(self.board_path, item, text, "ask", "human"))
             self._atomic_write(serialize_board(board))
             gc_id = item["id"]
             pending = pending_entry("cockpit", "Cockpit", None, item)
@@ -5205,6 +5521,10 @@ class Handler(BaseHTTPRequestHandler):
         text = (payload.get("text") or "").strip()
         if not text:
             return self._json(400, {"error": "text is missing"})
+        try:
+            author = _capture_author(payload)
+        except ValueError as exc:
+            return self._json(400, {"error": str(exc)})
         model = (payload.get("model") or "").strip()
         if model not in MODEL_CHOICES:
             return self._json(400, {"error": f"model must be one of: {', '.join(m or 'default' for m in MODEL_CHOICES)}"})
@@ -5243,9 +5563,7 @@ class Handler(BaseHTTPRequestHandler):
             if body:
                 item["body"] = body
             # Gleiche Diaet-Regel wie in _gc_append: lange Captures -> Sidecar, inline Kurzsatz+Verweis.
-            item["thread"] = [{"kind": "ask", "text": re.sub(
-                r"\s*\n+\s*", " \u00b7 ", sidecar.inline_turn(
-                    item["id"], title, text, self.board_path.parent / "gc-threads", kind="ask").strip())}]
+            item["thread"] = [authored_turn(self.board_path, item, text, "ask", author)]
             theme["cols"].setdefault(col, []).insert(0, item)
             self._atomic_write(serialize_board(board))
             gc_id = item["id"]

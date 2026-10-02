@@ -6,6 +6,19 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.24.0] — 2026-10-02
+- feat(board): clearer threads and reliable agent handoffs
+  - Ports generic origin fixes up to origin Build 6.37.7: turn provenance, background-job
+    continuation, live replies in an open card, terminal input lock, process stages,
+    board-integrity and thread-search fixes, compact Cockpit cards.
+  - Codex binary is resolved per spawn (`GC_RUNNER_CODEX`, then
+    `ChatGPT.app/…/codex-cli/bin/codex` — its location since ChatGPT 26.928 — then the old
+    app path, then `PATH`). 0.3.0 only knew the old path and failed with "Codex binary
+    not found" after the app update.
+  - Runner availability is checked per selected provider, so a signed-out Claude no longer
+    blocks an authenticated Codex.
+  - Jev, reply suggestions and cut advice stay out of the package; the core runs without them.
+
 ## [6.23.0] — 2026-09-05
 - feat(port): origin board stand of 2026-09-04 (origin Build 6.21.0) + English write edge
   - Ports the origin board from origin Build 6.19.15 to 6.21.0 (2026-08-26 → 2026-09-04
