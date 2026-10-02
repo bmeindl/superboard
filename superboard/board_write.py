@@ -243,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--id is required for --show, --body-file, and --stage")
 
         if args.show:
-            if args.body_file is not None or args.stage is not None or args.parent is not None:
+            if any(v is not None for v in (args.body_file, args.stage, args.parent)):
                 parser.error("--show cannot be combined with write options")
             item = fetch_item(base_url, args.id)
             print(json.dumps({"id": args.id, "body": item.get("body", []),

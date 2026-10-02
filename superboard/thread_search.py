@@ -16,6 +16,7 @@ never prevent the main Board run.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -30,17 +31,26 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import provenance
 import paths as _p
 from claude_identity import default_claude_env
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 INDEX_PATH = _p.DATA / "thread-search.sqlite"
 CANDIDATE_LIMIT = 12
 RESULT_LIMIT = 5
 EVIDENCE_PER_THREAD = 2
 EXCERPT_MAX = 420
 QUERY_TERM_MAX = 36
-RERANK_TIMEOUT = int(os.environ.get("GC_THREAD_CONTEXT_TIMEOUT", "60"))
+# Measured 2026-09-08 (Faden a3e18a6847a0): the pre-run relevance filter was the single
+# biggest slice of the delay between "send" and the first event in the Board overlay —
+# p50 36.6 s on the claude/haiku lane, and 84 of 452 runs burned the full 60 s timeout and
+# ended with NO context at all. Cause is not the CLI (~0.4 s boot) but extended thinking:
+# even a trivial prompt spent ~800-2000 thinking tokens under `--effort low`.
+# With thinking off, the same real rerank prompt went 29.9 s -> 7.1 s and kept the same
+# top lead. Restore the old behaviour with GC_THREAD_CONTEXT_THINK=1.
+RERANK_TIMEOUT = int(os.environ.get("GC_THREAD_CONTEXT_TIMEOUT", "30"))
+RERANK_THINKING = os.environ.get("GC_THREAD_CONTEXT_THINK", "0") != "0"
 CLAUDE_MODEL = os.environ.get("GC_THREAD_CONTEXT_CLAUDE_MODEL", "haiku")
 CODEX_MODEL = os.environ.get("GC_THREAD_CONTEXT_CODEX_MODEL", "gpt-5.6-luna")
 
@@ -111,7 +121,18 @@ def _title_parts(raw: str) -> tuple[str, str, str]:
 _PERSONS_HEADS = {"Personen", "To discuss"}
 
 
-def _item_documents(path: Path, archived: bool) -> list[Document]:
+def _author_label(author: str) -> str:
+    return {"human": "Human", "agent": "AI", "system": "System"}.get(author, "Unknown")
+
+
+def _resolved_author(event: dict, threads: Path) -> str:
+    try:
+        return provenance.resolve(event, threads)
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def _item_documents(path: Path, archived: bool, threads: Path = _p.THREADS) -> list[Document]:
     """Parse searchable item metadata without importing the write-side Board parser.
 
     This intentionally understands only top-level checkbox items and their indented body.
@@ -187,7 +208,7 @@ def _item_documents(path: Path, archived: bool) -> list[Document]:
     return docs
 
 
-def _sidecar_meta(path: Path) -> tuple[str, str, str, str]:
+def _sidecar_meta(path: Path, threads: Path = _p.THREADS) -> tuple[str, str, str, str]:
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     header = lines[0].lstrip("# ").strip() if lines else ""
@@ -245,7 +266,9 @@ def ensure_index(board: Path = _p.BOARD, archive: Path = _p.ARCHIVE,
     started = time.perf_counter()
     index.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(index, timeout=10)
+    contexts = ExitStack()
     try:
+        contexts.enter_context(provenance.resolution_batch(threads))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA journal_mode=WAL")
@@ -254,7 +277,12 @@ def ensure_index(board: Path = _p.BOARD, archive: Path = _p.ARCHIVE,
         current: set[str] = set()
         changed = 0
 
-        item_docs = [*_item_documents(board, False), *_item_documents(archive, True)]
+        revision = provenance.provenance_revision(threads)
+        previous_revision = conn.execute(
+            "SELECT value FROM meta WHERE key='provenance_revision'"
+        ).fetchone()
+        revision_changed = not previous_revision or previous_revision[0] != revision
+        item_docs = [*_item_documents(board, False, threads), *_item_documents(archive, True, threads)]
         item_context = {doc.gc_id: (doc.location, doc.archived) for doc in item_docs}
         for doc in item_docs:
             current.add(doc.key)
@@ -275,12 +303,12 @@ def ensure_index(board: Path = _p.BOARD, archive: Path = _p.ARCHIVE,
                 fm = SIDECAR_FILE_RE.match(path.name)
                 file_gc_id = fm.group(1) if fm else ""
                 location, item_archived = item_context.get(file_gc_id, ("Unscoped thread", False))
-                quick = f"{stat.st_mtime_ns}:{stat.st_size}:{location}:{int(item_archived)}"
+                quick = f"{stat.st_mtime_ns}:{stat.st_size}:{location}:{int(item_archived)}:{revision}"
                 if known.get(key) == quick:
                     current.add(key)
                     continue
                 try:
-                    gc_id, kind, title, content = _sidecar_meta(path)
+                    gc_id, kind, title, content = _sidecar_meta(path, threads)
                 except OSError:
                     continue
                 if not gc_id:
@@ -309,12 +337,15 @@ def ensure_index(board: Path = _p.BOARD, archive: Path = _p.ARCHIVE,
         for key in stale:
             conn.execute("DELETE FROM docs WHERE key=?", (key,))
             conn.execute("DELETE FROM source_state WHERE key=?", (key,))
+        conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('provenance_revision',?)", (revision,))
         conn.commit()
         count = int(conn.execute("SELECT count(*) FROM docs").fetchone()[0])
         return {"documents": count, "changed": changed, "removed": len(stale),
+                "provenance_revision": revision, "provenance_changed": revision_changed,
                 "ms": round((time.perf_counter() - started) * 1000)}
     finally:
         conn.close()
+        contexts.close()
 
 
 def query_terms(query: str) -> list[str]:
@@ -487,8 +518,11 @@ def _claude_rerank(prompt: str, command: str, timeout: int) -> tuple[dict, dict]
            "--safe-mode", "--tools", "", "--no-session-persistence",
            "--output-format", "json", "--json-schema", json.dumps(RERANK_SCHEMA)]
     with tempfile.TemporaryDirectory(prefix="gc-thread-rerank-") as td:
+        env = default_claude_env()
+        if not RERANK_THINKING:  # s. RERANK_TIMEOUT: Denkbudget = die eigentliche Wartezeit
+            env["MAX_THINKING_TOKENS"] = "0"
         proc = subprocess.run(cmd, cwd=td, capture_output=True, text=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL, env=default_claude_env())
+                              stdin=subprocess.DEVNULL, env=env)
     if proc.returncode != 0:
         failed = _json_payload(proc.stdout)
         detail = failed.get("result") or proc.stderr or proc.stdout
@@ -630,8 +664,12 @@ def pending_query(pending: dict, expanded_last_ask: str = "") -> str:
 
 def context_for(pending: dict, provider: str, command: str, board: Path, archive: Path,
                 threads: Path, index: Path, expanded_last_ask: str = "",
-                codex_home: Path | None = None, scope: str = "private") -> tuple[str, dict]:
-    """Build prompt context plus compact review telemetry for one Board run."""
+                codex_home: Path | None = None, scope: str = "private",
+                on_candidates=None) -> tuple[str, dict]:
+    """Build prompt context plus compact review telemetry for one Board run.
+
+    `on_candidates(task, hits)` fires right after the local search, before the model
+    filter — the log-only Jev shadow (jev_shadow.py) sees exactly these candidates."""
     if os.environ.get("GC_THREAD_CONTEXT", "1") == "0":
         return "", {"enabled": False, "backend": "disabled", "selected": []}
     task = pending_query(pending, expanded_last_ask)
@@ -641,6 +679,11 @@ def context_for(pending: dict, provider: str, command: str, board: Path, archive
             same_location=(pending.get("addr") or {}).get("name", ""),
             board=board, archive=archive, threads=threads, index=index, scope=scope,
         )
+        if on_candidates is not None:
+            try:
+                on_candidates(task, hits)
+            except Exception:  # noqa: BLE001 — a shadow hook must never touch the run
+                pass
         selected, judged = rerank(task, hits, provider, command, codex_home=codex_home)
         block = format_prompt(selected)
         meta = {"enabled": True, "in_prompt": bool(block), "candidates": len(hits),

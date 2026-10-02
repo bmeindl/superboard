@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 import uuid
+import provenance
 from datetime import datetime
 from pathlib import Path
 
@@ -53,15 +54,22 @@ _TS_RE = re.compile(r"-(\d{8})-(\d{6})-[0-9a-f]{4}\.md$")
 
 
 def write_sidecar(gc_id: str, title: str, full_text: str,
-                  sidecar_dir: Path | None = None, kind: str = "reply") -> Path:
+                  sidecar_dir: Path | None = None, kind: str = "reply",
+                  metadata: dict | None = None) -> Path:
     """Volltext eines Turns als eigene Datei ablegen. Append-only: Sidecars werden
     nie umbenannt oder überschrieben (Merge-Sicherheit Mac↔cloud)."""
     sidecar_dir = sidecar_dir or SIDECAR_DIR
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     path = sidecar_dir / f"{gc_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}.md"
-    path.write_text(f"# {HEADER_LABEL.get(kind, 'Thread turn')}: {title}\n\n"
+    author = (metadata or {}).get("author")
+    header = ("Agent brief" if author == "agent" and kind in ("ask", "brief")
+              else "Unverified turn" if author == "unknown"
+              else "System turn" if author == "system"
+              else HEADER_LABEL.get(kind, 'Thread turn'))
+    meta = provenance.encode({**metadata, "text": ""}).rstrip() + "\n\n" if metadata else ""
+    path.write_text(f"# {header}: {title}\n\n"
                     f"*{datetime.now().strftime('%Y-%m-%d %H:%M')} · Item @gc-id: {gc_id}*\n\n"
-                    f"{full_text}\n")
+                    f"{meta}{full_text}\n")
     return path
 
 
@@ -93,7 +101,8 @@ def _summary(text: str) -> str:
 
 
 def inline_turn(gc_id: str, title: str, text: str,
-                sidecar_dir: Path | None = None, kind: str = "reply") -> str:
+                sidecar_dir: Path | None = None, kind: str = "reply",
+                metadata: dict | None = None) -> str:
     """Faden-Turn → board.md-taugliche Zeile. Kurz: unverändert (kurze mehrzeilige
     @gc:-Notizen plättet der Server-Belt wie bisher zu `·`-Einzeilern). Lang — oder
     bei Antworten auch mehrzeilig (agent-formatiertes Markdown, Plätten zerstört
@@ -104,7 +113,9 @@ def inline_turn(gc_id: str, title: str, text: str,
         return flat
     if REF_RE.search(flat.split("\n", 1)[0]):
         return flat.split("\n", 1)[0].strip()  # trägt schon einen Verweis — nie doppelt auslagern
-    path = write_sidecar(gc_id, title, flat, sidecar_dir, kind)
+    path = write_sidecar(gc_id, title, flat, sidecar_dir, kind, metadata)
+    if metadata is not None:
+        metadata["source"] = path.name
     try:
         ref = path.relative_to(GC_ROOT)
     except ValueError:  # Sidecar-Dir außerhalb des Repos (z.B. Tests)

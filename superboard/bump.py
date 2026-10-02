@@ -72,7 +72,7 @@ def read_version() -> tuple[int, int, int]:
 
 def _git(*args: str) -> str:
     try:
-        return subprocess.run(["git", *args], cwd=HERE, capture_output=True,
+        return subprocess.run(["git", "--literal-pathspecs", *args], cwd=HERE, capture_output=True,
                               text=True, check=True).stdout
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         sys.exit(f"git {args[0]} fehlgeschlagen: {exc}")
@@ -89,8 +89,8 @@ def numstat_churn(numstat: str) -> tuple[int, list[str]]:
     1.361) und lässt normale Features fast unberührt (4.0.0: 601 → 554).
     """
     total, files = 0, []
-    for line in numstat.splitlines():
-        parts = line.split("\t")
+    for line in (numstat.split("\0") if "\0" in numstat else numstat.splitlines()):
+        parts = line.split("\t", 2)
         if len(parts) != 3:
             continue
         added, deleted, path = parts
@@ -103,18 +103,37 @@ def numstat_churn(numstat: str) -> tuple[int, list[str]]:
     return total, files
 
 
-def code_churn() -> tuple[int, list[str]]:
-    """Berührte Code-Zeilen unter superboard/ (Zählweise: numstat_churn).
+def selected_paths(names: list[str]) -> list[str]:
+    """Validate literal files before any version/changelog write, including deletions."""
+    root = Path(_git("rev-parse", "--show-toplevel").strip()).resolve()
+    tracked = {root / rel for rel in _git(
+        "ls-tree", "-r", "-z", "--name-only", "--full-tree", "HEAD", "--", str(HERE),
+    ).split("\0") if rel}
+    paths = []
+    for name in names:
+        path = Path(name).absolute()
+        resolved = path.resolve()
+        if (path.is_symlink() or not resolved.is_relative_to(HERE.resolve())
+                or resolved.is_dir()):
+            raise ValueError(f"--files requires individual files under {HERE}: {name}")
+        if not resolved.is_file() and resolved not in tracked:
+            raise ValueError(f"Unknown file (not an existing or tracked deletion): {name}")
+        if str(resolved) not in paths:
+            paths.append(str(resolved))
+    return paths
 
-    Ungetrackte Dateien zählen VOLL mit: `git diff HEAD` sieht sie nicht, und ein
-    Commit, der ein ganzes neues Modul mitbringt (wie seinerzeit receipt.py), wäre
-    sonst als 0-Churn durchgerutscht — also ausgerechnet der klarste minor-Fall.
-    """
-    total, files = numstat_churn(_git("diff", "HEAD", "--numstat", "--", str(HERE)))
-
-    root = Path(_git("rev-parse", "--show-toplevel").strip())
+def code_churn(paths: list[str]) -> tuple[int, list[str]]:
+    """Measure selected files only, including selected untracked additions."""
+    if not paths:
+        raise ValueError("At least one explicit file is required")
+    total, files = numstat_churn(_git(
+        "diff", "HEAD", "--no-renames", "--numstat", "-z", "--", *paths,
+    ))
+    root = Path(_git("rev-parse", "--show-toplevel").strip()).resolve()
     for rel in _git("ls-files", "--others", "--exclude-standard", "--full-name",
-                    "--", str(HERE)).splitlines():
+                    "-z", "--", *paths).split("\0"):
+        if not rel:
+            continue
         path = root / rel
         if path.suffix not in CODE_SUFFIXES or path.name in CONTENT_FILES:
             continue
@@ -123,9 +142,7 @@ def code_churn() -> tuple[int, list[str]]:
             files.append(path.name)
         except (OSError, UnicodeDecodeError):
             continue
-
     return total, files
-
 
 def decide(note: str, churn: int, forced: str | None) -> tuple[str, str]:
     """(level, begruendung)"""
@@ -209,9 +226,15 @@ def main() -> None:
     ap.add_argument("--minor", action="store_const", const="minor", dest="forced")
     ap.add_argument("--patch", action="store_const", const="patch", dest="forced")
     ap.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts schreiben")
+    ap.add_argument("--files", nargs="+", required=True,
+                    help="own commit files, relative to cwd or absolute; no directories")
     args = ap.parse_args()
 
-    churn, files = code_churn()
+    try:
+        paths = selected_paths(args.files)
+    except ValueError as exc:
+        ap.error(str(exc))
+    churn, files = code_churn(paths)
     if churn == 0 and not args.forced:
         print("Keine Code-Änderung unter superboard/ — kein Bump"
               " (Doku und Instanz-Inhalt bumpen nicht).")

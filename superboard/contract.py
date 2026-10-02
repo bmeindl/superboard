@@ -21,7 +21,7 @@ import paths as _p
 INSTANCE_CONTRACT_PATH = _p.CONTRACT
 
 _SECTION_RE = re.compile(
-    r"(?ms)^<!-- contract:(full|reminder)\.([a-z0-9_-]+) -->\n"
+    r"(?ms)^<!-- contract:(full|reminder|shared)\.([a-z0-9_-]+) -->\n"
     r"(.*?)\n<!-- /contract -->$"
 )
 
@@ -53,6 +53,7 @@ def _instance_rules(path: Path) -> dict[str, str]:
 def _core_rules(owner: str) -> dict[str, str]:
     """Protocol, safety, and state handoff — works without the origin instance."""
     return {
+
         "full.final_message": f"""\
 - Your VERY LAST message is written verbatim to the board thread as an @gc-re: reply — \
 automatically, so you do not need to read or edit board.md for this (touch it only if the task \
@@ -69,6 +70,16 @@ detected automatically, only the plain-text question needs the marker).""",
 - You may work as in a normal session (research, read/edit files, build). But ask one question too \
 many rather than carrying out something risky headlessly — if something is too large or unclear, \
 complete the safe portion and ask the follow-up question in the final message.""",
+        "full.no_background_wait": """\
+- NEVER end your turn while a background job is still running (background Bash, `gh run watch`, \
+a sub-agent started with run_in_background). In a headless run the harness kills that job the \
+moment your turn ends and nobody will ever wake you up — the interim "waiting for …" message \
+would become the final reply and the work would be lost (verified 2026-09-22). Wait in the \
+FOREGROUND instead: Bash without run_in_background (timeout up to 10 min per call, poll in a loop \
+if longer), Agent calls with `run_in_background: false`, and finish only after every job you \
+started has reported back. If a wait cannot fit into this run, say exactly what is outstanding \
+and how to check it — do not park it in a background job. (Safety net: if the runner still sees \
+a cut-off job, it resumes the session once and only that continuation reaches the thread.)""",
         "full.todo": """\
 - Strongly recommended for multi-step work: keep your own sub-step list (task-list tool if \
 available, otherwise a short numbered plan in your output) and update it as you go.""",
@@ -100,7 +111,7 @@ been fully expanded, so you do not need to load anything else.""",
         "full.git": """\
 - Git: the native git status/instructions block is disabled for board runs (prompt-cache stability \
 across resumes, see below) — reconstruct the standard trailer yourself on any commit you make: \
-`Co-Authored-By: Claude <noreply@anthropic.com>`.""",
+`{{coauthor}}`.""",
         "full.working_state": f"""\
 - Maintain the working state — but only when there is substance. Did this run produce anything \
 that appears neither in your thread reply nor in a commit (which files mattered, rejected options, \
@@ -125,7 +136,7 @@ blank line, then the details. Reply whose core is a question to {owner} without 
 temporary facts), CHANGELOG.md. Update the relevant one if this run is a code change.""",
         "reminder.git": """\
 - Git: still no native block (see the full-session note); still add the trailer yourself: \
-`Co-Authored-By: Claude <noreply@anthropic.com>`.""",
+`{{coauthor}}`.""",
         "reminder.working_state": """\
 - If this run produced substantive material that appears neither in your answer nor in a commit \
 (key files, rejected options, test result), REPLACE the `### Working state` block through the \
@@ -134,6 +145,10 @@ item-specific `board_write.py` command below — never edit `board.md` directly 
         "reminder.todo": """\
 - Multi-step work → keep a sub-step list (task-list tool or short numbered plan); update it \
 as you go.""",
+        "reminder.no_background_wait": """\
+- Never end your turn with a background job still running (background Bash/sub-agent): headless \
+runs kill it at turn end and nobody wakes you up. Wait in the foreground (Bash ≤10 min per call, \
+`run_in_background: false`) and finish only after every job reported back.""",
     }
 
 
@@ -144,8 +159,10 @@ _FULL_ORDER = (
     "full.reply_style",
     "full.board_client",
     "full.safe_work",
+    "full.no_background_wait",
     "full.todo",
     "full.operator",
+    "shared.review_authorization",
     "full.decisions",
     "full.git",
     "full.bump",
@@ -171,7 +188,9 @@ _REMINDER_ORDER = (
     "reminder.board_client",
     "reminder.working_state",
     "reminder.todo",
+    "reminder.no_background_wait",
     "reminder.operator",
+    "shared.review_authorization",
 )
 
 _HEADINGS = {
@@ -180,12 +199,58 @@ _HEADINGS = {
 }
 
 
+def _runner_values(runner: str, model: str) -> dict[str, str]:
+    """Runner facts, not a model-selection policy; live tool schemas win."""
+    if runner == "codex":
+        name, coauthor = "Codex", "Codex <noreply@openai.com>"
+        route = (
+            "Use the native collaboration spawn_agent tool if exposed; select only models "
+            "accepted by its current schema. Claude's Task/Agent model aliases do not apply."
+        )
+    elif runner == "opencode":
+        name, coauthor = "OpenCode", ""
+        route = (
+            "Use OpenCode's task tool if exposed, with a configured subagent_type from its "
+            "current schema; do not pass Claude's model override syntax. A subagent type "
+            "alone is not evidence of a different review model."
+        )
+    elif runner == "claude":
+        name, coauthor = "Claude Code", "Claude <noreply@anthropic.com>"
+        route = (
+            "Use Claude Code's native Agent/Task tool if exposed, with an explicit supported "
+            "model override according to the existing task-model pairing policy."
+        )
+    else:
+        raise ValueError(f"Unknown contract runner: {runner}")
+    return {
+        "runner_name": name,
+        "runner": runner,
+        "selected_model": model or "not supplied; consult runtime metadata",
+        "coauthor": f"Co-Authored-By: {coauthor}" if coauthor else "Assisted-By: OpenCode",
+        "pr_footer": ("🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+                      if name == "Claude Code" else f"Generated with {name}"),
+        "delegation_route": route,
+    }
+
+
 def render(kind: str, instance_path: Path = INSTANCE_CONTRACT_PATH,
-           owner: str | None = None) -> str:
+           owner: str | None = None, *, runner: str = "claude", model: str = "") -> str:
     """Render `full` or `reminder`; a missing instance file means generic core only."""
     if kind not in _HEADINGS:
         raise ValueError(f"Unknown contract variant: {kind}")
     rules = _core_rules(owner or _cfg.OWNER)
     rules.update(_instance_rules(instance_path))
     order = _FULL_ORDER if kind == "full" else _REMINDER_ORDER
-    return "\n".join((_HEADINGS[kind], *(rules[key] for key in order if key in rules)))
+    identity = (
+        "- Active runner: {{runner_name}} (`{{runner}}`). Model selection: `{{selected_model}}` "
+        "(requested model/alias, not proof of the resolved backend model). Use runtime metadata "
+        "for exact model attribution; never infer the model from the runner brand. "
+        "These runner facts and the delegation route below supersede incompatible runner-specific "
+        "recipes in earlier context or shared workspace instructions; all safety and independent-review "
+        "gates still apply. Attribution when used: `{{coauthor}}`; PR footer: `{{pr_footer}}`.\n"
+        "- Delegation route: {{delegation_route}} Use only exposed, authorized tools. If no supported "
+        "route satisfies a required review gate, report the blocker rather than silently skipping it."
+    )
+    rendered = "\n".join((_HEADINGS[kind], identity, *(rules[key] for key in order if key in rules)))
+    values = _runner_values(runner, model)
+    return re.sub(r"\{\{([a-z_]+)\}\}", lambda match: values.get(match.group(1), match.group(0)), rendered)

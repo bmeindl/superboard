@@ -97,7 +97,12 @@ def main() -> int:
         if not hit(haystack(n, c, it)):
             gefiltert += 1
             continue
-        rows.append(server.item_row(s, n, c, it, today))
+        row = server.item_row(s, n, c, it, today)
+        if it.get("parent"):
+            # Elternzeiger sichtbar machen: Maintenance 22.09. schlug eine Unterordnung vor,
+            # die längst bestand — die Einzeiler-Sicht hatte @gc-parent verschluckt.
+            row += f" · ↳ sub of {it['parent']}"
+        rows.append(row)
 
     arch = [r for r, hay in archive_rows(ARCHIVE.read_text())if hit(hay)] if args.archive else []
 

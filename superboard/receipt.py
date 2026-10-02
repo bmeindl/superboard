@@ -5,7 +5,7 @@ Was er *getan* hat — welche Dateien sich geändert haben, was der Permission-C
 geblockt hat, woran ein Lauf gestorben ist — stand nirgends. Das hier schreibt der
 RUNNER, nicht der Agent: der Agent kann es weder schönen noch vergessen.
 
-Bens Bedingungen an dieses Feature, wörtlich vom 21.07. — und wie sie eingelöst sind:
+the owner’s Bedingungen an dieses Feature, wörtlich vom 21.07. — und wie sie eingelöst sind:
 
 * „müsste komplett ein separates Modul sein"  → dieses Modul. Es importiert NICHTS aus
   gc_runner/server; der Kern erreicht es nur lazy über ``receipt_hook.py``.
@@ -27,6 +27,7 @@ das nicht ab. Das ist alles Fehlerpotenzial").
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -46,7 +47,7 @@ ENABLED = True
 # rauschten ~30 neue Dateien pro Tag durch jeden Commit.
 KEEP_PER_ITEM = 5
 
-# Obergrenze für gelistete Dateien/Aktionen. Großzügig: die alte 6 war Bens Beschwerde
+# Obergrenze für gelistete Dateien/Aktionen. Großzügig: die alte 6 war the owner’s Beschwerde
 # am 23.07. („nicht alle angefassten Dateien drin, nur die ersten paar"). Ein Cap bleibt
 # trotzdem — ein Massen-Rename darf das Receipt nicht in eine Textwand verwandeln.
 LIST_MAX = 40
@@ -121,8 +122,40 @@ def _fmt_duration(ms: float | int | None) -> str:
     return f"{s // 60}m {s % 60}s" if s >= 60 else f"{s}s"
 
 
+# Claim-Check (Item 968b9c019491, 22.09.): der Faden trägt seit Wochen Behauptungen wie
+# „verified" / „works" / „root cause", und nichts zählt, ob dahinter ein Beleg steht. Der
+# Meta-Review 06.09. (Zeilen 19/21) fand die Kernel-Regeln „Test it" und „measure the
+# mechanism" ohne beobachtbare Verletzungsprüfung. Das hier IST diese Prüfung — minimal:
+# der Runner zählt starke Behauptungswörter in der Antwort und ob ein Beleg-Marker dabei
+# ist (`Pre-challenge:`-Zeile aus dem challenge-Skill, Schritt 6, oder die Labels
+# `measured` / `probed`). Kein Urteil, kein Gate, kein Prompt-Text: nur sichtbar machen,
+# damit Retro/Meta-Review eine Rate messen können statt Einzelfälle zu sammeln
+# (Basislinie 06.08.–22.09.: 872 von 1518 Antworten mit starker Behauptung, 777 ohne Marker).
+# Bewusst NICHT die Bedeutung prüfen — das ist der AI-Post-Reviewer aus faee694e916e.
+CLAIM_RE = re.compile(
+    r"\b(verified|tested|all tests pass(?:ed)?|works(?: now| as expected)?|is live|live now"
+    r"|deployed|root cause|confirmed)\b", re.IGNORECASE)
+EVIDENCE_RE = re.compile(r"(Pre-challenge:|\bmeasured\b|\bprobed\b)", re.IGNORECASE)
+
+
+def claim_check(reply: str) -> str | None:
+    """Eine Receipt-Zeile über Behauptung vs. Beleg — oder None, wenn nichts behauptet wird."""
+    text = str(reply or "")
+    claims = sorted({m.group(1).lower() for m in CLAIM_RE.finditer(text)})
+    if not claims:
+        return None
+    pre = "present" if re.search(r"pre-challenge:", text, re.IGNORECASE) else "absent"
+    labels = len(re.findall(r"\b(measured|probed)\b", text, re.IGNORECASE))
+    line = f"claims «{', '.join(claims)}» · Pre-challenge line: {pre} · measured/probed labels: {labels}"
+    # Neutral wording, kein Warnglyph: das ist ein Zähler, kein Urteil (Review kimi 22.09.).
+    # Die Regex ist negations- und kontextblind („not verified" zählt als Behauptung).
+    if not EVIDENCE_RE.search(text):
+        line += " · evidence marker: none"
+    return line
+
+
 def _fmt_facts(gc_id: str, title: str, out: dict, delta: dict, started: float) -> str:
-    """Fakten → Markdown. Kompakt (Bens Sorge am 21.07.: „das ist dann so viel Daten")."""
+    """Fakten → Markdown. Kompakt (the owner’s Sorge am 21.07.: „das ist dann so viel Daten")."""
     u = out.get("usage_summary") or {}
     ok = out.get("ok")
     lines = [f"# Run receipt — {title or '(untitled)'}", "",
@@ -216,6 +249,10 @@ def _fmt_facts(gc_id: str, title: str, out: dict, delta: dict, started: float) -
             lines.append(f"  - `{name}`{f' — {arg}' if arg else ''}")
         if len(denials) > LIST_MAX:  # vorher still abgeschnitten — ein stiller Cut ist im
             lines.append(f"  - … {len(denials) - LIST_MAX} more")  # Fakten-Protokoll ein Bug
+
+    claim = claim_check(out.get("reply") or "")
+    if claim:
+        lines.append(f"- **Claim check:** {claim}")
 
     if out.get("session_id"):
         lines.append(f"- **Session:** `{out['session_id']}`")

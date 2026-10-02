@@ -182,6 +182,9 @@ def test_claude_filter_uses_private_identity_boundary(monkeypatch) -> None:
     assert payload == {"selected": []}
     assert "CLAUDE_CONFIG_DIR" not in captured["env"]
     assert "ANTHROPIC_BASE_URL" not in captured["env"]
+    # Denkbudget aus: der Filter war sonst der teuerste Posten VOR dem ersten Ereignis
+    # eines Runs (gemessen 2026-09-08: 29,9 s -> 7,1 s bei gleichem Top-Lead).
+    assert captured["env"]["MAX_THINKING_TOKENS"] == "0"
 
 
 def test_latest_ask_terms_survive_a_long_item_body() -> None:

@@ -90,3 +90,6 @@ def _topic_names(value: object) -> list[str]:
 _OFF_DUTY = _CFG.get("off_duty") if isinstance(_CFG.get("off_duty"), dict) else {}
 OFF_DUTY_HIDDEN_TOPICS = _topic_names(_OFF_DUTY.get("hidden_topics"))
 OFF_DUTY_VISIBLE_TOPICS = _topic_names(_OFF_DUTY.get("visible_topics"))
+
+# Experimental protocol observer; ordinary terminals work without it.
+CODEX_TERMINAL_INPUT = bool(_CFG.get("codex", {}).get("terminal_input_observer", False))

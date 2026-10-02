@@ -162,9 +162,9 @@ once. The two doors:
   `--docs`. Column names are `Now`, `Next`, `Backlog`. The client talks to
   `http://127.0.0.1:47822`; a board on another port takes `--url` or `GC_BOARD_URL`.
 - `POST /api/gc-append` — the endpoint the runner itself uses to report back.
-  JSON body `{"kind": "ask|reply|done|sys", "text": "…", "addr": {"id": "<gc-id>"}}`.
-  `ask` is an owner turn addressed to the agent, `reply` an agent turn addressed to
-  you, `done` closes the thread, `sys` is context that answers nothing. The
+  JSON body `{"kind": "reply", "by": "agent", "text": "…", "addr": {"id": "<gc-id>"}}`.
+  `ask` addresses the agent, `reply` returns an answer, `done` closes the thread,
+  and `sys` adds context that answers nothing. Send `by` separately to identify authorship. The
   `@gc-id` is the 12-hex tag on the card (visible in the file and in the card's
   overlay). The server answers 409 if the card is not uniquely found.
 
@@ -233,3 +233,15 @@ the usual way to get there. Run the linter after hand edits.
 Both are the same underlying shape: the file is the source of truth, so a guard
 strict enough to prevent this would also be strict enough to lock you out of your
 own board. That trade was made once in the other direction and reverted.
+
+
+## Turn authorship and optional experiments
+
+Thread direction and authorship are separate. An `ask` can be written by a person or an
+agent; integrations should send `"by":"agent"` for generated asks. Turns may also carry
+a timestamp and the model reported by the runner. Older turns without enough evidence
+are shown as author unverified, not silently attributed to you.
+
+Jev review, reply suggestions and automatic thread-cut advice are not included in 0.4.0.
+No separate classifier service or credentials are needed. The optional item terminal
+requires `tmux` and `ttyd`; normal task threads work without those executables.

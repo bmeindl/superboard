@@ -38,7 +38,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
@@ -130,7 +130,10 @@ def main() -> int:
         ab("eval", "document.querySelector('[data-view=todos]').click()")
         ab("wait", "300")
         body = ab("get", "text", "body").stdout
-        check("smoke: Board-Daten gerendert (Thema sichtbar)", "SmokeThema" in body)
+        # CSS presents headings uppercase; the stored/name DOM text must remain exact.
+        original_text = ab("eval", "document.body.textContent").stdout
+        check("smoke: Board-Daten gerendert (Thema sichtbar)",
+              "SMOKETHEMA" in body and "SmokeThema" in original_text)
         ver = ab("eval", "document.body.innerText.match(/Build \\d+\\.\\d+\\.\\d+/)?.[0] || ''").stdout
         check("smoke: Version im DOM (API /api/board kam durch)", f"Build {server.VERSION}" in ver)
 
@@ -280,6 +283,39 @@ def main() -> int:
         if not a11y_ok:
             print("       semantics=" + a11y.strip().replace("\n", " "))
             print("       active=" + restored.strip().replace("\n", " "))
+        # Regression: let the product timer update an OPEN thread. Do not call its
+        # sync helper directly; that would hide stale-etag and focus races.
+        ab("eval", "document.querySelector('.pill.for-owner').click();")
+        ab("eval", """const draft = document.querySelector('.gc-draft');
+          draft.focus(); draft.value = 'KEEP DRAFT';
+          draft.dispatchEvent(new Event('input', {bubbles:true}));""")
+        request = Request(url + "/api/gc-append", data=json.dumps({
+            "kind": "reply", "by": "agent", "text": "LIVE-CONTRACT-OK",
+            "addr": {"id": "aaaaaaaaaaaa"},
+        }).encode(), headers={"Content-Type": "application/json"})
+        with urlopen(request, timeout=5) as response:
+            check("smoke: external reply accepted", response.status == 200)
+        live = {}
+        for _ in range(20):
+            ab("wait", "500")
+            raw = ab("eval", """JSON.stringify({
+              reply: [...document.querySelectorAll('.gc-turn.reply')].some(
+                el => el.textContent.includes('LIVE-CONTRACT-OK')),
+              draft: document.querySelector('.gc-draft')?.value
+            })""").stdout
+            try:
+                live = json.loads(json.loads(raw))
+            except (json.JSONDecodeError, TypeError):
+                live = {}
+            if live.get("reply"):
+                break
+        check("smoke: automatic live reply preserves unsent draft",
+              live == {"reply": True, "draft": "KEEP DRAFT"})
+        ab("eval", "document.querySelector('.gc-draft').dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}));")
+        ab("wait", "100")
+        focus = ab("eval", "document.activeElement === document.querySelector('.pill.for-owner')").stdout
+        check("smoke: live-updated dialog restores opener focus", json.loads(focus) is True)
+        check("smoke: no errors after live update", ab("errors").stdout.strip() == "")
     finally:
         if browser_opened:
             ab("close")

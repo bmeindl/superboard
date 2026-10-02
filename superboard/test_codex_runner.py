@@ -384,12 +384,12 @@ def test_kontrakt_nennt_resume_befehl_des_runners() -> None:
     sein, sonst schreibt der Agent einen Befehl, der seine Session nie erreicht."""
     codex = gc_runner._contract_for("codex")
     assert "claude --resume" not in codex
-    assert f"`{gc_runner.CODEX_CMD} resume <SESSION>`" in codex
+    assert f"`{gc_runner.codex_cmd()} resume <SESSION>`" in codex
     assert "thread ID" in codex  # kopiert wird die Thread-ID, keine Session-UUID
     default = gc_runner._contract_for("claude")
     assert f"`{gc_runner.PRIVATE_CMD} --resume <SESSION>`" in default
     # Ende-zu-Ende über build_prompt: frischer Prompt trägt den Befehl des Runners.
-    assert f"{gc_runner.CODEX_CMD} resume <SESSION>" in gc_runner.build_prompt(
+    assert f"{gc_runner.codex_cmd()} resume <SESSION>" in gc_runner.build_prompt(
         _pending(), resume=False, runner="codex")
     assert f"{gc_runner.PRIVATE_CMD} --resume <SESSION>" in gc_runner.build_prompt(
         _pending(), resume=False, runner="claude")
@@ -469,6 +469,35 @@ def test_generate_codex_config_env_kollision() -> None:
             pass
     finally:
         gc_runner.CODEX_MCP_SERVERS = old
+
+
+def test_review_preapproval_requires_local_server_and_explicit_consent(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(gc_runner, "CODEX_MCP_SERVERS", ("sub-agent",))
+    import tomllib
+
+    cfg_path = tmp_path / "board.config.json"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    server = {"command": "uv", "args": ["run", "--project",
+              str(tmp_path / "tools/sub-agent-mcp"), "sub-agent-mcp"]}
+    mcp = {"mcpServers": {"sub-agent": server}}
+
+    def policy():
+        text, _ = gc_runner.generate_codex_config(mcp, tmp_path)
+        return tomllib.loads(text)["mcp_servers"]["sub-agent"]
+
+    assert "tools" not in policy()
+    for value in (False, "true", 1):
+        cfg_path.write_text(json.dumps({"codex": {"preapproved_text_reviews": value}}))
+        assert "tools" not in policy()
+    cfg_path.write_text(json.dumps({"codex": {"preapproved_text_reviews": True}}))
+    approved = policy()
+    assert approved["tools"] == {"run_review": {"approval_mode": "approve"}}
+    assert approved["tool_timeout_sec"] == 240
+    server["command"] = "/untrusted/uv"
+    assert "tools" not in policy()
+    server["command"] = "uv"
+    server["args"] = ["run", "--project", "/another/server", "sub-agent-mcp"]
+    assert "tools" not in policy()
 
 
 def test_link_shared_codex_state(tmp_path) -> None:

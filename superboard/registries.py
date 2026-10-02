@@ -36,6 +36,10 @@ def _text(value: object, *, allow_empty: bool = False) -> bool:
     return isinstance(value, str) and (allow_empty or bool(value.strip()))
 
 
+CARD_STATES = ("ok", "warn", "fail", "needs-input")
+HEADLINE_MAX = 40
+
+
 def load_actions(path: Path) -> tuple[list[dict], list[str]]:
     """Return validated actions in file order plus readable diagnostics."""
     raw, errors = _read_object(path, "actions.json")
@@ -64,9 +68,16 @@ def load_actions(path: Path) -> tuple[list[dict], list[str]]:
             problems.append("'prompt' must be non-empty text")
         if "auth" in entry and not isinstance(entry["auth"], bool):
             problems.append("'auth' must be a boolean")
-        for field in ("icon", "group", "rhythm", "status", "schedule"):
+        for field in ("icon", "group", "rhythm", "status", "schedule", "headline"):
             if field in entry and not _text(entry[field], allow_empty=True):
                 problems.append(f"'{field}' must be text")
+        # Card face (the owner 22.09., sheet cockpit-karten-kompakt Q3=A): the agent writes a
+        # state + a headline instead of free-length prose; the card takes its glyph from
+        # `state` rather than guessing from 🔴/❌ in the text.
+        if "state" in entry and entry["state"] not in CARD_STATES:
+            problems.append("'state' must be one of " + ", ".join(CARD_STATES))
+        if _text(entry.get("headline")) and len(entry["headline"]) > HEADLINE_MAX:
+            problems.append(f"'headline' must be at most {HEADLINE_MAX} characters")
         clean = dict(entry)
         if "timeout" in entry and (
             not isinstance(entry["timeout"], int) or isinstance(entry["timeout"], bool)

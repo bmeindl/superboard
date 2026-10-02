@@ -95,9 +95,12 @@ def test_agent_start_keeps_persistent_feedback_in_the_thread() -> None:
     assert 'refreshOverlayRun(it, "for_gc");' in source
     assert 'sub2.dataset.gcId = it.id || "";' in source
     assert "progress and the reply stay in this thread" in source
-    assert "${running.length} active" in source
+    assert "${runIds.length} agent run(s) working right now" in source
     assert 'textContent = "Build " + data.version' in source
-    assert 'const openId = overlayOpen ? document.getElementById("gc-ov-status")?.dataset.gcId' in source
+    # Behavior is exercised by test_ui_smoke: external reply arrives automatically,
+    # draft survives, and Escape restores focus. Keep static wiring checks too.
+    assert 'async function syncOpenCard(j)' in source
+    assert 'await syncOpenCard(j);' in source
     assert "openGcOverlay(hit[0], hit[1]);" in source
 
 

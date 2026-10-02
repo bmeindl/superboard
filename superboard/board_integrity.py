@@ -82,7 +82,19 @@ def loss_issues(board: Path | None = None, archive: Path | None = None,
     issues: list[str] = []
 
     for ref in SIDECAR_REF_RE.findall(text):
-        if not (root / ref).is_file():
+        if (root / ref).is_file():
+            continue
+        # Liegt die Datei im Archivordner, ist NICHTS verloren — dann ist die Live-Zeile
+        # selbst der Fehler: eine Stale-Kopie eines bereits archivierten Items, die nach
+        # dem Sweep in board.md zurückkam (Lost Update, gemessen 05.09. mit 13 Items /
+        # 105 solcher Verweise). Absichtlich KEIN Fallback auf archive/ — der Verweis
+        # bleibt ein Befund, er bekommt nur die richtige Ursache mit auf den Weg.
+        archived = _p.THREADS_ARCHIVE / Path(ref).name
+        if archived.is_file():
+            issues.append(f"board.md: Verweis zeigt auf eine ARCHIVIERTE Sidecar-Datei → {ref} "
+                          f"(liegt in {archived.parent.name}/) — kein Datenverlust, sondern eine "
+                          "Live-Dublette eines archivierten Items: Item aus board.md entfernen")
+        else:
             issues.append(f"board.md: toter Sidecar-Verweis → {ref}")
 
     ids = _known_ids(text, archive)

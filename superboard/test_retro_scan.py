@@ -16,6 +16,7 @@ im zweiten Retro-Lauf auf, die dritte beim Archiv-Audit am 13.08.:
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -249,6 +250,35 @@ def test_killed_ignoriert_eigenen_stop_button(tmp_path, monkeypatch):
     monkeypatch.setattr(retro_scan, "KILLED", p)
     funde = retro_scan.scan_killed(date(2026, 8, 10))
     assert [f.gc_id for f in funde] == ["bbb222"]
+
+
+def test_killed_nur_api_retry_wird_als_netz_markiert(tmp_path, monkeypatch):
+    """0 Schritte + Stream nur aus init/api_retry = der Agent kam nie zu Wort (Netz/API).
+    Der Beleg sagt das selbst; ein Stream MIT Modellantwort bekommt den Hinweis nicht."""
+    netz = tmp_path / "netz.jsonl"
+    netz.write_text(
+        '{"type": "system", "subtype": "init"}\n'
+        '{"type": "system", "subtype": "api_retry", "attempt": 1}\n'
+        '{"type": "system", "subtype": "api_retry", "attempt": 2}\n', encoding="utf-8")
+    antwort = tmp_path / "antwort.jsonl"
+    antwort.write_text(
+        '{"type": "system", "subtype": "api_retry", "attempt": 1}\n'
+        '{"type": "assistant", "message": {}}\n', encoding="utf-8")
+    p = tmp_path / "killed-runs.jsonl"
+    p.write_text(
+        json.dumps({"ts": "2026-09-16 14:32:49", "gc_id": "aaa111", "reason": "idle",
+                    "steps": 0, "stream": str(netz)}) + "\n"
+        + json.dumps({"ts": "2026-09-16 15:00:00", "gc_id": "bbb222", "reason": "idle",
+                      "steps": 0, "stream": str(antwort)}) + "\n"
+        + json.dumps({"ts": "2026-09-16 16:00:00", "gc_id": "ccc333", "reason": "cap",
+                      "steps": 12, "stream": str(netz)}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retro_scan, "KILLED", p)
+    belege = {f.gc_id: f.beleg for f in retro_scan.scan_killed(date(2026, 9, 10))}
+    assert "nur api_retry ×2" in belege["aaa111"]
+    assert "api_retry" not in belege["bbb222"]
+    assert "api_retry" not in belege["ccc333"]
 
 
 def test_erwaehnter_crash_ist_kein_crash(tmp_path):

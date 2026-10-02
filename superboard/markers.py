@@ -32,6 +32,10 @@ import re
 # importiert diese Map (sweep.gc_tag fällt zusätzlich generisch zurück statt zu crashen).
 GC_TAG = {"ask": "@gc:", "reply": "@gc-re:", "done": "@gc-done:", "sys": "@gc-sys:"}
 
+# Optional structured author metadata immediately after a turn tag. Direction tags
+# remain unchanged; legacy turns without metadata remain readable and unverified.
+AUTHOR_META_PREFIX = "<!--gc-meta:"
+
 # ---------------------------------------------------------------- Sidecar-Verweise
 # New boards emit English labels. The legacy German labels remain readable forever:
 # these strings are persisted in board.md, so changing the writer without widening the

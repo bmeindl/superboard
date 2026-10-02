@@ -12,15 +12,15 @@ import receipt_hook
 HERE = Path(__file__).resolve().parent
 
 
-def test_runner_import_and_git_context_work_without_receipt_module() -> None:
+def test_runner_import_and_git_context_work_without_optional_modules() -> None:
     code = r'''
 import importlib.abc
 import sys
 
 class BlockReceipt(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
-        if fullname == "receipt":
-            raise ModuleNotFoundError("receipt intentionally absent", name="receipt")
+        if fullname in {"receipt", "jev_shadow", "jev_nudge", "suggest", "cut_advice"}:
+            raise ModuleNotFoundError(fullname + " intentionally absent", name=fullname)
         return None
 
 sys.meta_path.insert(0, BlockReceipt())
@@ -46,6 +46,8 @@ with tempfile.TemporaryDirectory() as td:
         "title": "No receipt", "body": [], "session": "", "gc_last": "",
         "thread": [{"kind": "ask", "text": "run"}], "last_ask": "run",
     }
+    assert "cut_advice.py" not in gc_runner.build_prompt(pending, resume=False)
+    server.annotate_sheets({"themes": [], "persons": []})
     assert "## Git" in gc_runner._git_context("abcabcabcabc", False)
     out = gc_runner.run_item(
         pending, journal_dir=root / "journal", sidecar_dir=root / "threads",

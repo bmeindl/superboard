@@ -426,6 +426,35 @@ def transkript(stream: str, session_id: str, model: str = "",
     return (stream or "?") + "  (Transkript nicht mehr da)"
 
 
+def nur_api_retry(stream: str, schritte: object) -> int:
+    """Zahl der `api_retry`-Ereignisse, wenn ein 0-Schritte-Abbruch NIE eine Modellantwort bekam.
+
+    Lauf 20.09.: 8 der 20 killed-Signale waren genau das — `init`, dann 6–10 `api_retry`
+    (`error: unknown`), dann der Waechter. Das ist Netz/API (damals: DNS outage),
+    strukturell nie ein Agentenfehler: der Agent kam nicht zu Wort. Drei Pruef-Subs haben das
+    unabhaengig aus den Streams herausgelesen; der Scanner kann es in einer Zeile selbst sagen.
+    0 = nicht belegbar (Schritte > 0, Stream weg/zu gross, oder es gab eine Modellantwort)."""
+    if schritte not in (0, "0") or not stream:
+        return 0
+    p = Path(stream)
+    try:
+        if not p.exists() or p.stat().st_size > 2_000_000:
+            return 0
+        retries = 0
+        for zeile in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                e = json.loads(zeile)
+            except json.JSONDecodeError:
+                continue
+            if e.get("type") in ("assistant", "user", "result"):
+                return 0
+            if e.get("subtype") == "api_retry":
+                retries += 1
+        return retries
+    except OSError:
+        return 0
+
+
 def scan_killed(seit: date) -> list[Fund]:
     if not KILLED.exists():
         return []
@@ -449,11 +478,15 @@ def scan_killed(seit: date) -> list[Fund]:
         # ein 0-Schritte-Stop (a3abed2b20ad) stand als killed·2 in der Kandidatenliste.
         if grund == "stop":
             continue
+        retries = nur_api_retry(e.get("stream", ""), e.get("steps"))
+        hinweis = (f" — nur api_retry ×{retries}, keine Modellantwort (Netz/API, kein Agentenfehler)"
+                   if retries else "")
         funde.append(Fund(
             signal="killed", gc_id=e.get("gc_id", ""), titel=e.get("title", ""),
             datum=ts, score=3 if grund in ("cap", "idle", "hung") else 2,
             beleg=f"abgebrochen ({grund}) nach {e.get('elapsed_min', '?')} min, "
-                  f"{e.get('steps', '?')} Schritte, zuletzt {e.get('last_tool', '?')}, {e.get('model', '?')}",
+                  f"{e.get('steps', '?')} Schritte, zuletzt {e.get('last_tool', '?')}, "
+                  f"{e.get('model', '?')}{hinweis}",
             quelle=transkript(e.get("stream", ""), e.get("session_id", ""), e.get("model", "")),
             zeit=e.get("ts", ""),
         ))
