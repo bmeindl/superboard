@@ -49,7 +49,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.24.0"
+VERSION = "6.24.2"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -2730,8 +2730,17 @@ def _is_dev_theme(name: str) -> bool:
     return name.strip().lower().startswith(DEV_THEME_PREFIXES)
 
 
+# The finite first-run checklist is setup, not work: it never counts toward load,
+# inflow or the 'Now' limit, and quick capture never files a new to-do into it.
+ONBOARDING_THEME = "Getting started"
+
+
+def _is_onboarding_theme(name: str) -> bool:
+    return name.strip().lower() == ONBOARDING_THEME.lower()
+
+
 def _scope_of(kind: str, name: str) -> str:
-    if kind != "theme":
+    if kind != "theme" or _is_onboarding_theme(name):
         return "other"
     return "board" if _is_sugar_theme(name) else "prod"
 
@@ -2741,7 +2750,7 @@ ARCHIVE_ORIGIN_RE = re.compile(r"(?m)^- \[[xX]\][^\n]*?←\s*([^\n]+)$")
 
 def _archive_scope(origin: str) -> str:
     """Herkunft einer Archivzeile („Thema / Spalte" bzw. „Person: Name") → Topf."""
-    if origin.strip().lower().startswith("person:"):
+    if origin.strip().lower().startswith("person:") or _is_onboarding_theme(origin.split("/")[0]):
         return "other"
     return "board" if _is_sugar_theme(origin.split("/")[0]) else "prod"
 
@@ -2855,13 +2864,15 @@ def attention_hints(board: dict, today: date, archive: Path | None = None) -> li
         hints.append({"kind": "due", "group": "wait", "theme": theme, "src": src,
                       "text": f"⏳ {title} — waiting for {on_whom} for {days} days; follow up"})
     for th in board["themes"]:
+        if _is_onboarding_theme(th["name"]):
+            continue
         n = len([it for it in th["cols"].get("Jetzt", []) if not it["done"]])
         if n > JETZT_WARN:
             hints.append({"kind": "limit", "theme": th["name"], "src": "theme",
                           "text": f"⚠ 'Now' is overflowing in {th['name']} ({n}/{JETZT_WARN})"})
     if today.weekday() == 4:  # Freitag
         jetzt_open = sum(len([it for it in th["cols"].get("Jetzt", []) if not it["done"]])
-                         for th in board["themes"])
+                         for th in board["themes"] if not _is_onboarding_theme(th["name"]))
         goal = "reached ✦" if jetzt_open == 0 else f"{jetzt_open} still open"
         hints.append({"kind": "friday", "text": f"🏁 Friday goal 'Now empty' — {goal}"})
         hints.append({"kind": "friday",
@@ -3590,7 +3601,8 @@ def _wesen_core(board: dict, today: date, archive: Path | None = None,
     archive = archive or BOARD_ARCHIVE
     iso7 = (today - timedelta(days=7)).isoformat()
     iso3 = (today - timedelta(days=3)).isoformat()
-    themes = [t for t in board["themes"] if not _is_dev_theme(t["name"])]
+    themes = [t for t in board["themes"]
+              if not _is_dev_theme(t["name"]) and not _is_onboarding_theme(t["name"])]
     items = [it for t in themes for col in t["cols"].values() for it in col]
     jetzt = [it for t in themes for it in t["cols"].get("Jetzt", []) if not it["done"]]
     # Undatierte Items zählen wie „heute angelegt" (Verhalten unverändert seit 21.07.).
@@ -3619,7 +3631,8 @@ def _wesen_core(board: dict, today: date, archive: Path | None = None,
     # Velocity hat einen WEITEREN Scope als die Last-Beine: Dev (Work) ist echte Arbeit
     # und zählt auf BEIDEN Seiten mit (nur Board/Tools sind Zuckerwerk) — sonst entstünde
     # dieselbe Asymmetrie nochmal, nur andersherum.
-    velo_items = [it for t in board["themes"] if not _is_sugar_theme(t["name"])
+    velo_items = [it for t in board["themes"]
+                  if not _is_sugar_theme(t["name"]) and not _is_onboarding_theme(t["name"])
                   for col in t["cols"].values() for it in col]
     inflow = sum(1 for it in velo_items if not it["done"] and (it.get("date") or "") >= iso7)
     # Abfluss ROLLEND über dieselben 7 Tage wie der Zufluss. Vorher stand hier
@@ -5545,7 +5558,10 @@ class Handler(BaseHTTPRequestHandler):
             named = {th["name"].strip().lower(): th for th in board["themes"]}
             theme = named.get(want_theme) if want_theme else None
             if theme is None:
-                theme = named.get("inbox") or (board["themes"][0] if board["themes"] else None)
+                # Without an explicit topic: Inbox, then My to-dos, then the first real
+                # topic. Never the first-run checklist, which a fresh board lists too.
+                theme = named.get("inbox") or named.get("my to-dos") or next(
+                    (th for th in board["themes"] if not _is_onboarding_theme(th["name"])), None)
             if theme is None:  # voellig leeres Board: dann eben doch einen Fangkorb anlegen
                 theme = {"name": "Inbox", "cols": {c: [] for c in DEFAULT_COLUMNS}}
                 board["themes"].insert(0, theme)

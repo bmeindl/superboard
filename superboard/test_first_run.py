@@ -161,7 +161,7 @@ def test_the_run_contract_names_the_workspace_client_not_a_module() -> None:
 def test_cards_that_create_things_name_the_client() -> None:
     cli = _cli_module()
     missions = {title: mission for _c, title, _s, mission, _a in cli.STARTER_ITEMS}
-    real_work = next(m for t, m in missions.items() if "Add your first real to-do" in t)
+    real_work = next(m for t, m in missions.items() if "Hand off your first real task" in t)
     assert "--new-card" in real_work and "--topic 'My to-dos'" in real_work
     assert "--new-topic" not in real_work
     assert "never edit inbox/board.md" in real_work.lower()
@@ -194,34 +194,37 @@ def test_runner_status_is_exposed_and_rendered() -> None:
 def test_the_first_real_hand_off_follows_the_introduction() -> None:
     cli = _cli_module()
     titles = [title for _c, title, _s, _m, _a in cli.STARTER_ITEMS]
-    assert 8 <= len(titles) <= 14, "the checklist stays finite without bundling setup"
+    assert len(titles) == 8, "the checklist stays finite: eight cards"
     assert "Start here" in titles[0]
-    assert "Set up this workspace" in titles[1]
-    assert "Add your first real to-do" in titles[2]
+    assert "Hand off your first real task" in titles[1]
+    assert "Set up this workspace" in titles[2]
     assert not any("Find your way around" in title for title in titles)
 
 
-def test_setup_concerns_are_concrete_and_cockpit_is_in_now() -> None:
-    titles = [title.strip("*") for _c, title, _s, _m, _a in _cli_module().STARTER_ITEMS]
-    assert "11 · Turn on night rest" in titles
-    assert "10 · Set up an off-duty view" in titles
-    assert "7 · Set up your Cockpit" in titles
-    assert "8 · Set up an email digest" in titles
-    assert "9 · Set up one routine" in titles
-    assert "12 · Let Superboard learn from your threads" in titles
-    assert "13 · Get more from Superboard" in titles
+def test_later_setups_are_offered_not_carded_and_now_stays_small() -> None:
+    items = _cli_module().STARTER_ITEMS
+    titles = [title.strip("*") for _c, title, _s, _m, _a in items]
+    assert "6 · Set up your Cockpit" in titles
+    assert "7 · Get more from Superboard" in titles
     assert not any("optional setup" in title.lower() for title in titles)
-    cockpit = next(item for item in _cli_module().STARTER_ITEMS if "Cockpit" in item[1])
-    assert cockpit[0] == "Jetzt"
+    # Mail digest, routine, off-duty, night rest and learning are things to ask for,
+    # listed by card 7, not cards of their own.
+    more = next(m for _c, t, _s, m, _a in items if "Get more from Superboard" in t)
+    for later in ("email digest", "routine", "off-duty view", "night_pause", "three or four days"):
+        assert later in more
+    assert sum(1 for c, *_ in items if c == "Jetzt") == 3
+    cockpit = next(item for item in items if "Cockpit" in item[1])
+    assert cockpit[0] == "Bald"
     assert not cockpit[1].startswith("**")
 
 
 def test_workspace_and_agent_setup_are_separate_concrete_outcomes() -> None:
     missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
-    setup = missions["2 · Set up this workspace"]
+    setup = missions["3 · Set up this workspace"]
+    assert "do not repeat a setup conversation" in setup
     assert "context/README.md" in setup and "2–5 board topics" in setup
     assert "does not move its cards, threads or spend history" in setup
-    agent = missions["6 · Check your agent and model setup"]
+    agent = missions["5 · Find settings and get help"]
     assert "platform and run profile" in agent
     assert "Claude Code or the experimental macOS Codex runner" in agent
     assert "OpenCode is not a supported runner" in agent
@@ -230,7 +233,7 @@ def test_workspace_and_agent_setup_are_separate_concrete_outcomes() -> None:
 
 def test_cockpit_setup_creates_extension_before_any_write() -> None:
     missions = {title.strip("*"): mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
-    cockpit = missions["7 · Set up your Cockpit"]
+    cockpit = missions["6 · Set up your Cockpit"]
     assert "FIRST ensure exactly one" in cockpit
     assert "Cockpit extension · Add a useful recurring action" in cockpit
     assert cockpit.index("FIRST") < cockpit.index("Inventory")
@@ -322,10 +325,47 @@ def test_manual_cards_are_the_baseline_and_overlapping_saves_are_serialized() ->
 
 def test_off_duty_uses_explicit_topics_and_keeps_unknown_topics_visible() -> None:
     missions = {title: mission for _c, title, _s, mission, _a in _cli_module().STARTER_ITEMS}
-    mission = missions["10 · Set up an off-duty view"]
+    mission = missions["7 · Get more from Superboard"]
     assert "/onboarding-showcase#off-duty" in mission
     assert "off_duty.hidden_topics" in mission and "off_duty.visible_topics" in mission
     assert "unknown or future topics remain visible" in mission
     source = (HERE / "index.html").read_text(encoding="utf-8")
     assert "off_duty_hidden_topics" in source
     assert "WORK_THEMES" not in source
+
+
+def test_getting_started_is_setup_not_load() -> None:
+    """A fresh board must not open 'overloaded': the checklist stays out of the
+    meters, the 'Now' limit and the load score, and a capture without a topic lands
+    in My to-dos instead of the checklist."""
+    sys.path.insert(0, str(HERE))
+    import server
+
+    assert server._is_onboarding_theme("Getting started")
+    assert server._scope_of("theme", "Getting started") == "other"
+    assert server._scope_of("theme", "My to-dos") == "prod"
+    source = (HERE / "server.py").read_text(encoding="utf-8")
+    assert 'named.get("inbox") or named.get("my to-dos")' in source
+    html = (HERE / "index.html").read_text(encoding="utf-8")
+    assert '!inHeadScope(t) || t.name.trim().toLowerCase() === "getting started"' in html
+    assert server._is_onboarding_theme("  getting STARTED ")
+
+
+def test_workspace_client_targets_its_own_board(tmp_path, monkeypatch) -> None:
+    """A second board on another port must not receive this workspace's cards."""
+    import importlib.util
+
+    client = tmp_path / ".superboard" / "board_write.py"
+    client.parent.mkdir(parents=True)
+    client.write_bytes((HERE / "board_write.py").read_bytes())
+    spec = importlib.util.spec_from_file_location("ws_board_write", client)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.delenv("GC_BOARD_URL", raising=False)
+    assert module._default_url() == "http://127.0.0.1:47822"
+    (client.parent / "board-url").write_text("http://127.0.0.1:47883\n", encoding="utf-8")
+    assert module._default_url() == "http://127.0.0.1:47883"
+    monkeypatch.setenv("GC_BOARD_URL", "http://127.0.0.1:47999")
+    assert module._default_url() == "http://127.0.0.1:47999"
+    source = (HERE / "__main__.py").read_text(encoding="utf-8")
+    assert '".superboard" / "board-url"' in source
