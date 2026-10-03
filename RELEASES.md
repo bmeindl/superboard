@@ -7,6 +7,23 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
 — that number counts every change by size and is not a stability promise.
 `CHANGELOG.md` inside the package is that internal build history.
 
+## [0.4.1] — 2026-10-03 · real work first
+
+- A fresh board opens with your own to-dos on top. Getting started shrinks from 14
+  cards to 8, and only 3 of them are in Now. Email digest, routine, Off Duty, night
+  rest and thread learning are now things you ask for, not cards of their own.
+- Card 2 hands off your first real task. It uses a task your installing agent
+  already added, or asks you for one. Card 3 (workspace setup) closes quickly when
+  the installer already did that work.
+- Getting started no longer counts toward NEW/NOW, the Now limit or the load meter,
+  so a fresh board no longer opens "over limit". A capture without a topic lands in
+  your to-dos, never in the checklist.
+- The README has new install guidance for your agent: choose the folder together,
+  fit into an existing workspace, bring at most three tasks, open the board and stop.
+- Fix: `.superboard/board_write.py` writes to the board it belongs to, also when
+  that board runs on a port other than 47822.
+- Existing boards keep their cards and threads. Build 6.24.2.
+
 ## [0.4.0] — 2026-10-02 · clearer threads and a refreshed board
 
 - Thread turns carry author, timestamp and model information when available; older

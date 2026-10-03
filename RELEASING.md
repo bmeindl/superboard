@@ -108,3 +108,6 @@ README claim nobody verified this round.
   browser recording is not proof of agent replies: test a configured public CLI too.
   Upgrade from the published previous wheel, then repeat startup to check idempotence.
   Refresh screenshots from a clean workspace; do not publish local provider settings.
+- 2026-10-03 · 0.4.1: a release can ship one merged feature PR on its own. The
+  origin port then waits for the next release; classify the open origin entries
+  anyway and say which ones wait.
