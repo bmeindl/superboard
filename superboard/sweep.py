@@ -400,9 +400,18 @@ def done_at(it: dict) -> datetime | None:
     ts = it.get("done_at", "")
     if ts:
         try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            # Date-only hand edits need the same generous retention as `date`.
+            day = date.fromisoformat(ts)
         except ValueError:
-            pass
+            try:
+                parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                # @done-at is UTC by contract, including stamps missing an offset.
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+        else:
+            return datetime.combine(day, datetime.max.time()).replace(
+                microsecond=0, tzinfo=timezone.utc)
     d = it.get("date", "")
     if not d:
         return None

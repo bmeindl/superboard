@@ -7,6 +7,23 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
 — that number counts every change by size and is not a stability promise.
 `CHANGELOG.md` inside the package is that internal build history.
 
+## [0.5.0] — 2026-10-21 · runs that survive, agents that close the loop
+
+- Runs hold up better on a Mac: Superboard keeps the machine awake while an agent
+  works, so idle sleep no longer stalls a run until the watchdog kills it.
+- A board restart in the middle of a run loses nothing: a finished reply arrives as
+  "↩ Late reply", and the leftover agent counts as running, so ▶ cannot start a
+  second agent on the same session.
+- The prompt reaches the agent CLI through stdin instead of the process list. A run
+  killed by another process now says so in plain words.
+- Agents can tick off what they finished: `.superboard/board_write.py --id <id> --done`
+  (or `--sub N` for one checklist line); `--show` lists the lines.
+- A calmer board: cells with more than eight cards fold behind `+N MORE`, and old waits
+  no longer turn the board red. Missed deadlines still do.
+- Fixes: nightly archiving no longer crashes on a date-only completion stamp, and
+  `/repo-file/` links in replies open again.
+- Existing boards keep their cards and threads. Build 6.25.0.
+
 ## [0.4.1] — 2026-10-03 · real work first
 
 - A fresh board opens with your own to-dos on top. Getting started shrinks from 14

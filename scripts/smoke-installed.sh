@@ -65,9 +65,11 @@ fi
 # The workspace path is passed explicitly, exactly as a user types it. A first start
 # without one is refused by design ("first start needs an explicit workspace path"),
 # so an implicit start here would never even reach the assertions below.
+# `exec`: the server replaces the subshell, so $! is the server itself and the EXIT
+# trap really stops it (before, it killed only the subshell and the server lived on).
 (
   cd "$SB_SMOKE_WORKSPACE"
-  PATH="$SB_SMOKE_CLEAN_PATH" "$SB_SMOKE_PYTHON" -m superboard --port "$SB_SMOKE_PORT" \
+  PATH="$SB_SMOKE_CLEAN_PATH" exec "$SB_SMOKE_PYTHON" -m superboard --port "$SB_SMOKE_PORT" \
     "$SB_SMOKE_WORKSPACE" >"$SB_SMOKE_LOG" 2>&1
 ) &
 SB_SMOKE_SERVER_PID=$!
