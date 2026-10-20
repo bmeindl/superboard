@@ -111,3 +111,10 @@ README claim nobody verified this round.
 - 2026-10-03 · 0.4.1: a release can ship one merged feature PR on its own. The
   origin port then waits for the next release; classify the open origin entries
   anyway and say which ones wait.
+- 2026-10-21 · 0.5.0: the public files carry no German comments, so every three-way
+  merge of an origin commit conflicts on comment-adjacent hunks. Port per commit
+  (`git merge-file` with base = origin `<c>^`, theirs = origin `<c>`), auto-keep the
+  public version header, and port the FINAL origin state of a feature when a later
+  origin commit fixed it. Re-check new code paths against features the public package
+  lacks (here: an orphan guard placed where origin had restart-now code). A model-diverse
+  review of the port found three real gaps the suite missed; budget for one fix round.
