@@ -45,8 +45,10 @@ def test_show_body_replace_stage_and_conflict(tmp_path, capsys):
         shown = json.loads(capsys.readouterr().out)
         assert shown == {
             "id": "a1b2c3d4e5f6",
+            "done": False,
             "body": ["Old body"],
             "bodyEtag": server.item_body_etag(["Old body"]),
+            "subs": [],
         }
 
         assert board_write.main([
@@ -88,5 +90,63 @@ def test_ensure_card_is_idempotent(tmp_path, capsys):
         titles = [it["title"] for theme in parsed["themes"]
                   for col in theme["cols"].values() for it in col]
         assert titles.count("Cockpit extension · Add a useful recurring action") == 1
+    finally:
+        httpd.shutdown()
+
+
+TICK_BOARD = """## Dev
+
+### Jetzt
+
+- [ ] Tick this card *(2026-10-01)*
+  Note
+  @gc-id: b1c2d3e4f5a6
+  - [ ] First step
+  - [ ] Second step
+
+### Bald
+
+### Geparkt
+
+# Personen
+
+# Notizen
+"""
+
+
+def test_done_ticks_card_and_checklist_entry(tmp_path, capsys):
+    """Agents tick cards and checklist entries with --done instead of asking the user."""
+    board = tmp_path / "board.md"
+    board.write_text(TICK_BOARD)
+    httpd, url = _serve(board)
+    gid = "b1c2d3e4f5a6"
+    try:
+        assert board_write.main(["--url", url, "--id", gid, "--show"]) == 0
+        shown = json.loads(capsys.readouterr().out)
+        assert shown["done"] is False
+        assert shown["subs"] == ["1. [ ] First step", "2. [ ] Second step"]
+
+        assert board_write.main(["--url", url, "--id", gid, "--done", "--sub", "2"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["changed"] is True and result["sub"] == "Second step"
+        it = server.find_item(server.parse_board(board.read_text()), {"id": gid})[0]
+        assert [s["done"] for s in it["subs"]] == [False, True] and it["done"] is False
+
+        assert board_write.main(["--url", url, "--id", gid, "--done"]) == 0
+        capsys.readouterr()
+        it = server.find_item(server.parse_board(board.read_text()), {"id": gid})[0]
+        assert it["done"] is True and it["done_at"] and it["date"] != "2026-10-01"
+        assert it["body"] == ["Note"] and len(it["subs"]) == 2
+
+        # Idempotent, and reversible.
+        assert board_write.main(["--url", url, "--id", gid, "--done"]) == 0
+        assert json.loads(capsys.readouterr().out)["changed"] is False
+        assert board_write.main(["--url", url, "--id", gid, "--undone"]) == 0
+        capsys.readouterr()
+        it = server.find_item(server.parse_board(board.read_text()), {"id": gid})[0]
+        assert it["done"] is False and it["done_at"] == ""
+
+        assert board_write.main(["--url", url, "--id", gid, "--done", "--sub", "3"]) == 1
+        assert "HTTP 404" in capsys.readouterr().err
     finally:
         httpd.shutdown()

@@ -529,7 +529,13 @@ def _body_write_hint(pending: dict) -> str:
                 "body changed after this run started: use `--show`, merge the current body, and retry. "
                 "To move this item under another item (one level only) or back to top level, use "
                 f"`python3 {BOARD_WRITE} --id {gc_id} --parent <parent-id>` "
-                "(`--parent ''` clears it) — never splice `@gc-parent:` by hand.")
+                "(`--parent ''` clears it) — never splice `@gc-parent:` by hand. "
+                "Tick the card off yourself when this run truly finishes it — nothing left for "
+                "anyone, no open question to the user, no own pull request still awaiting review "
+                f"or merge: `python3 {BOARD_WRITE} --id {gc_id} --done` "
+                "(say so in your reply; `--undone` reverts). Tick a checklist line only when that "
+                "line itself is fully met: `--done --sub <N>` (`--show` lists the lines; the "
+                "reply names the line it hit — `--undone` if it is the wrong one).")
     except Exception:
         return ""
 
@@ -1129,6 +1135,19 @@ def _orphaned_background_tasks(stdout: str) -> list[dict]:
     return [t for tid, t in started.items() if tid not in finished]
 
 
+def _von_aussen(returncode: int | None) -> str:
+    """Lesbare Meldung, wenn ein FREMDER Prozess den Run beendet hat (die Board-eigenen
+    Abbrüche laufen über _kill_outcome und kommen hier nie an). 143/137 = 128+Signal,
+    so meldet es der caffeinate-Wrapper; -15/-9 meldet Python bei direktem Kind."""
+    if returncode in (143, -15):
+        return (f"Stopped from outside (SIGTERM, exit {returncode}): another process ended this run. "
+                "Nothing is lost — ▶ or 'cont' continues where it stopped.")
+    if returncode in (137, -9):
+        return (f"Killed from outside (SIGKILL, exit {returncode}): another process or macOS (memory "
+                "pressure?) ended this run hard. Nothing is lost — ▶ or 'cont' continues where it stopped.")
+    return ""
+
+
 def _parse_claude_stdout(stdout: str, stderr: str, returncode: int | None) -> dict:
     """claude-Ausgabe → Outcome-Dict. Gemeinsamer Parser für den Live-Pfad
     (spawn_claude) und die Journal-Recovery (Server-Neustart mitten im Run)."""
@@ -1136,8 +1155,8 @@ def _parse_claude_stdout(stdout: str, stderr: str, returncode: int | None) -> di
     if env is None:
         return {"ok": False, "reply": "", "session_id": sid_hint, "denials": [],
                 "context_tokens": 0, "usage_summary": {},
-                "raw_error": f"no result from Claude (exit {returncode}): "
-                             f"{_lesbarer_rest(stderr or stdout)}"}
+                "raw_error": _von_aussen(returncode) or (f"no result from Claude (exit {returncode}): "
+                                                          f"{_lesbarer_rest(stderr or stdout)}")}
     if env.get("is_error") or env.get("subtype") != "success":
         # `errors` MIT in den raw_error: bei subtype=error_during_execution ist `result`
         # leer, der Grund steht nur dort ("No conversation found with session ID: …").
@@ -1631,13 +1650,20 @@ def resolve_profile(profile: str) -> tuple[str, str]:
 
 
 def keep_awake_argv(cmd: list[str], enabled: bool) -> list[str]:
-    """Wrap exactly one long runner process in macOS `caffeinate`.
+    """Wrap every runner process in macOS `caffeinate` so idle sleep cannot kill the run.
 
-    The wrapper and the CLI share the runner's process group, so Stop/timeout tears down
-    both. Other platforms (and missing system binaries) keep the original argv.
+    Standard runs get `-ims` (no idle/disk sleep, no system sleep on AC; the display may
+    still turn off). `enabled` = the explicit long run, which keeps the full `-dimsu`.
+    Lid-close sleep on battery stays possible — caffeinate cannot prevent it. The wrapper
+    and the CLI share the runner's process group, so Stop/timeout tears down both. Other
+    platforms (and missing system binaries) keep the original argv — so does a runner CLI
+    that does not resolve, so launch still fails loudly with "not found" instead of
+    inside the wrapper.
     """
     caffeine = Path("/usr/bin/caffeinate")
-    return [str(caffeine), "-dimsu", *cmd] if enabled and sys.platform == "darwin" and caffeine.exists() else cmd
+    if sys.platform != "darwin" or not caffeine.exists() or not (cmd and shutil.which(cmd[0])):
+        return cmd
+    return [str(caffeine), "-dimsu" if enabled else "-ims", *cmd]
 
 
 MAX_FINAL_STREAM_BYTES = 32_000_000
@@ -1681,7 +1707,13 @@ def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mod
     cmd = [claude_cmd]
     if resume_id:
         cmd += ["--resume", resume_id]
-    cmd += ["-p", prompt, "--permission-mode", "auto", "--settings", AGENT_SETTINGS]
+    # Prompt über stdin statt als argv (Faden 64958a3505eb, 05.10.2026): in argv stand der
+    # ganze Prompt in jeder Prozessliste, und ein fremdes `pkill -f "run()"` traf darüber
+    # alle laufenden Board-Runs. Stattdessen trägt die Kommandozeile einen kurzen,
+    # sprechenden Namen — gezielt findbar, aber kein Volltext mehr, an dem lose Muster hängen.
+    cmd += ["-p", "--permission-mode", "auto", "--settings", AGENT_SETTINGS]
+    if journal is not None:
+        cmd += ["--name", f"Superboard run {journal.meta.get('gc_id', '')} · {journal.meta.get('title', '')}"[:80]]
     # Der teuerste Einzelposten des Boards, gemessen 2026-08-10 (Faden 596cd041c2e1):
     # Claude Code rendert cwd, Datum und `git status` in den System-Prompt. Dieses Repo
     # schreibt bei JEDEM Run (board.md, Threads) — der Prompt-Präfix ist damit jedes Mal
@@ -1713,7 +1745,7 @@ def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mod
     if journal is None:
         try:
             proc = subprocess.run(cmd, cwd=GC_ROOT, capture_output=True, text=True,
-                                  timeout=timeout, stdin=subprocess.DEVNULL,
+                                  timeout=timeout, input=prompt,
                                   env=run_env)
         except subprocess.TimeoutExpired:
             # Pfad ohne Journal (CLI/Tests): kein Strom auf Platte, also auch kein
@@ -1740,11 +1772,14 @@ def spawn_claude(prompt: str, resume_id: str, claude_cmd: str, timeout: int, mod
             on_beat(state)   # live an den Server für die Anzeige im Board
 
     try:
-        with open(journal.out_path, "w+") as fo, open(journal.err_path, "w+") as fe:
+        with open(journal.out_path, "w+") as fo, open(journal.err_path, "w+") as fe, \
+                tempfile.TemporaryFile("w+") as fin:
+            fin.write(prompt)
+            fin.seek(0)  # namenlose Datei statt Pipe: kein Deadlock bei großen Prompts
             # start_new_session: eigene Prozessgruppe, damit ein Abbruch auch die vom
             # Agenten gestarteten Kinder erwischt (s. _signal_group).
             proc = subprocess.Popen(cmd, cwd=GC_ROOT, stdout=fo, stderr=fe, text=True,
-                                    stdin=subprocess.DEVNULL, start_new_session=True,
+                                    stdin=fin, start_new_session=True,
                                     env=run_env)
             journal.set_pid(proc.pid)
             reason, elapsed = watch_run(proc, tail, timeout, journal.stop_path, _beat)
@@ -2434,11 +2469,52 @@ def _pid_alive(pid: int | None) -> bool:
     return True
 
 
+def orphan_runs(journal_dir: Path | None = None) -> dict[str, dict]:
+    """Runs, deren claude-Prozess noch lebt, obwohl ihr Server-Thread weg ist — {gc_id: meta}.
+
+    Ein Server-Tausch/Absturz mitten im Run lässt den Agenten absichtlich weiterlaufen
+    (start_new_session, s. spawn_claude); recover_journals() erntet seine Antwort später.
+    Bis dahin kennt der neue Server ihn nicht — RUNNING ist leer. Am 15.10. (Faden
+    fbbba1f87a1b) startete das nächste `cont` des Nutzers deshalb ein zweites `--resume` auf
+    DIESELBE Session, und zwei Agenten schrieben im selben Worktree gegeneinander.
+    Der Aufrufer zieht seine eigenen RUNNING-Einträge ab; dies hier ist nur der Journal-Blick.
+    Bewusst KEIN Altersdeckel (Review gpt-6.1-sol, 20.10.): die Waise hat keinen Wächter
+    mehr und kann länger laufen als jede Kappe — ein Deckel öffnete die Kollision wieder.
+    Gegen Endlos-Sperre hilft ⏹ (server.request_stop beendet die Waise); PID-Recycling hat
+    kaum ein Fenster, weil recover_journals tote Journale binnen ~RECOVER_GRACE wegräumt."""
+    journal_dir = journal_dir or JOURNAL_DIR
+    found: dict[str, dict] = {}
+    for meta_path in journal_dir.glob("run-*.meta.json") if journal_dir.exists() else []:
+        try:
+            meta = json.loads(meta_path.read_text())
+            if meta.get("status") == "running" and meta.get("gc_id") and _pid_alive(int(meta.get("pid") or 0)):
+                found[meta["gc_id"]] = meta
+        except (json.JSONDecodeError, OSError, TypeError, ValueError, AttributeError):
+            continue  # ein kaputtes Journal darf die übrigen nicht verdecken
+    return found
+
+
 def _open_gc_ids(base_url: str) -> set[str]:
     """Items, die gerade auf GC warten (⏳). Recovery postet NUR dorthin — sonst würde
     ein Journal, dessen Append in Wahrheit durchging, die Antwort ein zweites Mal anhängen."""
     with urllib.request.urlopen(f"{base_url}/api/gc-pending", timeout=10) as r:
         return {p["addr"].get("id") for p in json.load(r)["pending"]}
+
+
+def _late_reply(meta: dict, out_path: Path, err_path: Path, sidecar_dir: Path) -> tuple[str, str] | None:
+    """(Text, Modell) einer fertig geschriebenen, nie geposteten Antwort — oder None.
+    Nur ein erfolgreicher Strom zählt (ein halber/abgebrochener soll einen inzwischen
+    weitergelaufenen Faden nicht mit einem ❌ zumüllen), und erst wenn out.json seit
+    RECOVER_GRACE ruht: ein CLI-Run kann zwischen Prozess-Ende und journal.ready() stehen."""
+    if not out_path.exists() or time.time() - out_path.stat().st_mtime < RECOVER_GRACE:
+        return None
+    stderr = err_path.read_text() if err_path.exists() else ""
+    parsed = parse_by_runner(meta.get("model", ""), out_path.read_text(), stderr, None, out_path)
+    if not parsed["ok"] or not (parsed.get("reply") or "").strip():
+        return None
+    started = time.strftime("%d.%m. %H:%M", time.localtime(float(meta.get("started", 0))))
+    text = f"↩ Late reply from the run started {started} (it finished, but was never delivered): {parsed['reply']}"
+    return _inline_reply(meta.get("gc_id", ""), meta.get("title", ""), text, sidecar_dir), answer_model(parsed)
 
 
 def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = None,
@@ -2507,6 +2583,20 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
                 continue
             if time.time() - float(meta.get("started", 0)) < RECOVER_GRACE:
                 continue  # pid evtl. noch nicht gesetzt (Startfenster) — nicht vorschnell löschen
+            # status=running heißt: journal.ready() lief nie, die Antwort wurde also NIE
+            # gepostet. Hat der Prozess trotzdem fertig geschrieben, verspätet nachliefern statt
+            # löschen (07.10., Faden d56d5e158d9d: Server-Tausch mitten im Run, der Agent schrieb
+            # zu Ende, der nächste Turn des Nutzers kam vor der Ernte — die Wache warf die Antwort weg).
+            # Ohne Session/gc_last: der Handle des neueren Runs darf nicht überschrieben werden.
+            late = (_late_reply(meta, out_path, err_path, sidecar_dir)
+                    if meta.get("status") == "running" else None)
+            if late:
+                try:
+                    _post_append(base_url, gc_id, late[0], "", "", runner_of(meta.get("model", "")), late[1])
+                    notes.append(f"recover: {gc_id} ('{title}') late reply appended")
+                except RuntimeError as e:
+                    notes.append(f"recover: {gc_id} — late append failed ({e}); keeping journal")
+                    continue
             for p in drop:
                 p.unlink(missing_ok=True)
             continue

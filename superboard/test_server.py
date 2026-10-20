@@ -911,6 +911,45 @@ def test_journal_wache_verschont_laufenden_run() -> None:
             gc_runner._open_gc_ids = orig_open
 
 
+def test_journal_wache_liefert_verlorene_antwort_nach() -> None:
+    """Regression 07.10. (Faden d56d5e158d9d): Server-Tausch mitten im Run, der Agent schrieb
+    fertig, aber niemand postete (status=running). Der nächste Nutzer-Turn kam vor der Ernte,
+    danach war das Item nicht mehr pending — die Wache löschte die fertige Antwort. Jetzt:
+    verspätet nachliefern, ohne den Session-Handle des neueren Runs zu überschreiben."""
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        jdir = Path(td)
+        posted: list[tuple] = []
+        orig_open, orig_post = gc_runner._open_gc_ids, gc_runner._post_append
+        gc_runner._open_gc_ids = lambda _url: set()   # Item ist NICHT mehr pending
+        gc_runner._post_append = lambda *a, **k: posted.append(a)
+        try:
+            old = time.time() - gc_runner.RECOVER_GRACE - 10
+            j = gc_runner.RunJournal("eeeeeeeeeeee", "verloren", "http://x", 900, journal_dir=jdir)
+            j.meta.update(pid=999999, started=old)
+            j._write()
+            j.out_path.write_text(json.dumps({"type": "result", "subtype": "success",
+                                              "result": "Fertige Antwort", "session_id": "x"}) + "\n")
+            os.utime(j.out_path, (old, old))
+            gc_runner.recover_journals("http://x", journal_dir=jdir, sidecar_dir=jdir)
+            check("wache: verlorene Antwort wird nachgeliefert",
+                  len(posted) == 1 and "Fertige Antwort" in posted[0][2] and "Late reply" in posted[0][2])
+            check("wache: Nachlieferung lässt Session und gc_last leer", posted and posted[0][3:5] == ("", ""))
+            check("wache: Journal danach weg", not j.meta_path.exists())
+
+            # Gegenprobe: abgebrochener Strom ohne Ergebnis → nichts posten, nur aufräumen
+            posted.clear()
+            j2 = gc_runner.RunJournal("ffffffffffff", "halb", "http://x", 900, journal_dir=jdir)
+            j2.meta.update(pid=999999, started=old)
+            j2._write()
+            j2.out_path.write_text('{"type": "assistant"}\n')
+            os.utime(j2.out_path, (old, old))
+            gc_runner.recover_journals("http://x", journal_dir=jdir, sidecar_dir=jdir)
+            check("wache: halber Strom wird nicht nachgeliefert", not posted and not j2.meta_path.exists())
+        finally:
+            gc_runner._open_gc_ids, gc_runner._post_append = orig_open, orig_post
+
+
 def test_fehllauf_stempel() -> None:
     """Q3 (2026-07-22): auch abgebrochene Runs stempeln — vorher hinterließ ein toter
     Run am Item KEINE Spur (Spend-Limit-Abbruch 21.07.). Ohne Grund im Stempel: „reicht ja
@@ -1896,8 +1935,31 @@ def test_gc_run_all_and_sidecar_route() -> None:
             Path(tmp).unlink(missing_ok=True)
 
 
-ARGV_ECHO = ('print(json.dumps({"result": " ".join(sys.argv[1:]), "session_id": "s",'
+# argv UND stdin: seit 06.10.2026 kommt der Claude-Prompt über stdin, nicht mehr als argv.
+ARGV_ECHO = ('print(json.dumps({"result": " ".join(sys.argv[1:]) + " " + sys.stdin.read(), "session_id": "s",'
              ' "permission_denials": [], "subtype": "success", "is_error": False}))')
+
+
+def test_prompt_nicht_in_argv() -> None:
+    """Faden 64958a3505eb (05.10.2026): ein fremdes `pkill -f "run()"` traf alle Board-Runs,
+    weil der ganze Prompt in argv stand. Jetzt: Prompt über stdin, argv trägt nur einen
+    kurzen Namen; ein fremder Kill gibt eine lesbare Meldung, die KEINEN Frisch-Retry auslöst."""
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        journal = gc_runner.RunJournal("abcabcabcabc", "Mein Titel", "http://x", 60, journal_dir=d / "j")
+        echo = _fake_claude(d, "argvonly", 'a = " ".join(sys.argv[1:]); p = sys.stdin.read()\n'
+                            'print(json.dumps({"result": a + " ||| " + p, "session_id": "s",'
+                            ' "permission_denials": [], "subtype": "success", "is_error": False}))')
+        out = gc_runner.spawn_claude("GEHEIMER PROMPT run()", "", echo, 10, journal=journal)
+        argv, _, stdin = out["reply"].partition(" ||| ")
+        check("stdin: Prompt fehlt in argv", "GEHEIMER" not in argv)
+        check("stdin: Prompt kommt über stdin an", stdin.strip() == "GEHEIMER PROMPT run()")
+        check("stdin: argv trägt den sprechenden Run-Namen", "--name Superboard run abcabcabcabc · Mein Titel" in argv)
+        killed = gc_runner.spawn_claude("p", "", _fake_claude(
+            d, "term", 'import os, signal\nos.kill(os.getpid(), signal.SIGTERM)'), 10, journal=journal)
+        check("fremder Kill: lesbare SIGTERM-Meldung", "Stopped from outside (SIGTERM" in killed["raw_error"])
+        check("fremder Kill: kein Frisch-Retry als tote Session", not gc_runner._looks_like_dead_session(killed))
+        check("fremder Kill: 137 = SIGKILL", "SIGKILL" in gc_runner._von_aussen(137))
 
 
 def test_model_choice() -> None:
@@ -1961,10 +2023,13 @@ def test_long_run_policy() -> None:
     check("long-run: Prompt verlangt Checkpoints + Synthese-Reserve",
           "manifest.md" in block and "45 minutes" in block and "watchdogs" in block)
     check("long-run: Standardprompt bleibt unverändert", gc_runner._long_run_block({}) == "")
-    wrapped = gc_runner.keep_awake_argv(["agent", "--go"], True)
+    wrapped = gc_runner.keep_awake_argv(["/bin/echo", "--go"], True)
     expected = sys.platform == "darwin" and Path("/usr/bin/caffeinate").exists()
-    check("long-run: macOS hält nur den gewählten Kindprozess wach",
-          (wrapped[0] == "/usr/bin/caffeinate") == expected)
+    check("long-run: macOS hält den Kindprozess voll wach (-dimsu)",
+          (wrapped[:2] == ["/usr/bin/caffeinate", "-dimsu"]) == expected)
+    plain = gc_runner.keep_awake_argv(["/bin/echo", "--go"], False)
+    check("standard-run: leichtes caffeinate -ims gegen Idle-Sleep, Display darf aus",
+          (plain[:2] == ["/usr/bin/caffeinate", "-ims"]) == expected and plain[-2:] == ["/bin/echo", "--go"])
     with tempfile.TemporaryFile(mode="w+") as stream:
         stream.write("INIT\n" + "x" * 200 + "\nRESULT")
         clipped = gc_runner.bounded_run_text(stream, limit=40)
@@ -2444,6 +2509,38 @@ def test_wait_decay() -> None:
     overdue2, stamped2, changed2 = sweep.escalate_waits(b, today)
     check("eskalation: idempotent — zweiter Lauf meldet, ändert aber nichts",
           len(overdue2) == 1 and stamped2 == 0 and not changed2)
+
+
+def test_orphan_run_blocks_second_resume() -> None:
+    """Faden fbbba1f87a1b (15.10.): ein Server-Tausch mitten im Run lässt den Agenten als
+    Waise weiterlaufen; der neue Server kannte ihn nicht und startete beim nächsten `cont`
+    ein zweites `--resume` auf dieselbe Session. Ein lebendes running-Journal zählt jetzt
+    wie RUNNING: Start abgesagt, ⏹ beendet die Waise; tote/fertige Journale sperren nicht."""
+    old_dir = gc_runner.JOURNAL_DIR
+    proc = subprocess.Popen(["sleep", "60"], start_new_session=True)   # die „Waise"
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            jd = gc_runner.JOURNAL_DIR = Path(td)
+            meta = {"gc_id": "0rphan000001", "title": "T", "status": "running",
+                    "pid": proc.pid, "started": time.time() - 60, "timeout": 900}
+            mp = jd / "run-0rphan000001-1.meta.json"
+            mp.write_text(json.dumps(meta))
+            (jd / "run-broken-0.meta.json").write_text(json.dumps({**meta, "gc_id": "x", "pid": "kaputt"}))
+            check("orphan: lebender Prozess zählt (kaputtes Nachbar-Journal verdeckt nichts)",
+                  "0rphan000001" in server.orphan_ids())
+            started = server.launch_gc_run({"addr": {"id": "0rphan000001"}},
+                                           "http://127.0.0.1:1", "claude", 60)
+            check("orphan: kein zweiter Run auf demselben Item",
+                  started is False and "0rphan000001" not in server.RUNNING)
+            mp.write_text(json.dumps({**meta, "status": "ready"}))
+            check("orphan: fertiges Journal ist keine Waise", "0rphan000001" not in server.orphan_ids())
+            mp.write_text(json.dumps(meta))
+            check("orphan: ⏹ beendet die Waise", server.request_stop("0rphan000001") == "")
+            proc.wait(timeout=5)
+            check("orphan: toter Prozess sperrt nicht", "0rphan000001" not in server.orphan_ids())
+    finally:
+        proc.kill()
+        gc_runner.JOURNAL_DIR = old_dir
 
 
 def test_journal_recovery() -> None:
@@ -3400,7 +3497,7 @@ def test_interrupt_und_weiter() -> None:
     # kein einzelnes JSON mehr — dann greift der Strom-Zweig des Parsers, und der erkennt
     # das Ergebnis nur an "type":"result".
     echo = ('print(json.dumps({"type":"result","subtype":"success","is_error":False,'
-            '"permission_denials":[],"result":" ".join(sys.argv[1:]),'
+            '"permission_denials":[],"result":" ".join(sys.argv[1:]) + " " + sys.stdin.read(),'
             f'"session_id":"{sid}"}}))')
     body = (f'print(json.dumps({{"type":"system","subtype":"init","session_id":"{sid}"}}), flush=True)\n'
             "time.sleep(0 if '--resume' in sys.argv else 30)\n" + echo)
@@ -6003,8 +6100,7 @@ def main() -> int:
                test_runner_spawn_envelopes, test_runner_inline_and_sidecar,
                test_gc_run_endpoint, test_gc_run_failure_visible,
                test_sol_final_fixes, test_gc_run_all_and_sidecar_route,
-               test_model_choice,
-
+               test_model_choice, test_prompt_nicht_in_argv,
                test_long_run_policy,
                test_sweep_respects_open_threads, test_sweep_closes_done_threads,
                test_sweep_stamps_missing_done_at,
@@ -6012,7 +6108,7 @@ def main() -> int:
                test_sweep_unknown_thread_kind, test_sweep_heartbeat,
                test_sweep_sidecar_archive, test_sweep_sidecar_collision_warns,
                test_sweep_sidecar_dry_run, test_sweep_sidecar_order_safety,
-               test_wait_field, test_wait_decay, test_journal_recovery, test_timeout_default,
+               test_wait_field, test_wait_decay, test_journal_recovery, test_orphan_run_blocks_second_resume, test_timeout_default,
                test_version_in_changelog, test_dev_radar_ref_resolution,
                test_dev_radar_review_stale_zeigt_den_letzten_kommentar,
                test_quick_capture_endpoint, test_auto_retrigger, test_interrupt_und_weiter,

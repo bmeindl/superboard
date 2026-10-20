@@ -13,10 +13,11 @@ agent will quietly route around — and routing around it means hand-editing
 
 Verbs:
 
-    --show          print the current body and its bodyEtag (no write)
+    --show          print the current body, its bodyEtag, done state and checklist (no write)
     --body-file     replace this item's body (needs --body-etag)
     --stage         append a process stage to this item
     --parent        re-parent this item under another one (one level only)
+    --done/--undone tick or untick the card (with --sub N: one checklist entry)
     --new-card      create a to-do (never starts a run)
     --ensure-card   create a to-do only when that exact title is not already active
     --new-topic     create an empty board topic (row)
@@ -34,6 +35,9 @@ Examples:
       --stage 'tested · pytest *(2026-08-22)*'
     python3 .superboard/board_write.py --id a1b2c3d4e5f6 --parent b1c2d3e4f5a6
     python3 .superboard/board_write.py --id a1b2c3d4e5f6 --parent ''   # back to top level
+    python3 .superboard/board_write.py --id a1b2c3d4e5f6 --done      # tick the card
+    python3 .superboard/board_write.py --id a1b2c3d4e5f6 --undone    # untick it
+    python3 .superboard/board_write.py --id a1b2c3d4e5f6 --done --sub 2   # tick checklist entry 2
     python3 .superboard/board_write.py --new-card 'Renew the domain' \
       --topic Admin --col Now --card-body-file /tmp/notes.md
     python3 .superboard/board_write.py --new-topic 'Clients'
@@ -217,6 +221,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--parent", metavar="ID",
                         help="re-parent under this @gc-id (one level only); "
                              "'' moves it back to top level")
+    tick = parser.add_mutually_exclusive_group()
+    tick.add_argument("--done", dest="done", action="store_const", const=True,
+                      help="tick the card off (or, with --sub, one checklist entry)")
+    tick.add_argument("--undone", dest="done", action="store_const", const=False,
+                      help="untick the card (or, with --sub, one checklist entry)")
+    parser.add_argument("--sub", type=int, metavar="N",
+                        help="1-based checklist entry for --done/--undone; --show lists them")
     parser.add_argument("--new-card", metavar="TITLE", help="create a to-do with this title")
     parser.add_argument("--ensure-card", metavar="TITLE",
                         help="create a to-do unless that exact title is already active")
@@ -232,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--docs", choices=("readme", "architecture", "changelog"),
                         help="print the product's own documentation and exit")
     args = parser.parse_args(argv)
+    writes = (args.body_file, args.stage, args.parent, args.done)
     base_url = args.url.rstrip("/")
 
     try:
@@ -254,20 +266,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if not args.id:
-            parser.error("--id is required for --show, --body-file, and --stage")
+            parser.error("--id is required for --show, --body-file, --stage, --parent and --done")
 
         if args.show:
-            if any(v is not None for v in (args.body_file, args.stage, args.parent)):
+            if any(v is not None for v in writes):
                 parser.error("--show cannot be combined with write options")
             item = fetch_item(base_url, args.id)
-            print(json.dumps({"id": args.id, "body": item.get("body", []),
-                              "bodyEtag": item_body_etag(item.get("body", []))},
+            print(json.dumps({"id": args.id, "done": item.get("done", False),
+                              "body": item.get("body", []),
+                              "bodyEtag": item_body_etag(item.get("body", [])),
+                              "subs": [f"{n}. [{'x' if s.get('done') else ' '}] {s.get('text', '')}"
+                                       for n, s in enumerate(item.get("subs", []), 1)]},
                              ensure_ascii=False, indent=2))
             return 0
 
-        if args.body_file is None and args.stage is None and args.parent is None:
-            parser.error("one of --show, --body-file, --stage, --parent, --new-card, "
-                         "--new-topic, or --docs is required")
+        if all(v is None for v in writes):
+            parser.error("one of --show, --body-file, --stage, --parent, --done, --undone, "
+                         "--new-card, --new-topic, or --docs is required")
+        if args.sub is not None and args.done is None:
+            parser.error("--sub needs --done or --undone")
         if args.body_file is not None and not args.body_etag:
             parser.error("--body-etag is required with --body-file")
 
@@ -278,6 +295,10 @@ def main(argv: list[str] | None = None) -> int:
             payload["stage"] = args.stage
         if args.parent is not None:
             payload["parent"] = args.parent.strip()
+        if args.done is not None:
+            payload["done"] = args.done
+            if args.sub is not None:
+                payload["sub"] = args.sub
         print(json.dumps(post(base_url, "/api/gc-body", payload), ensure_ascii=False))
         return 0
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as exc:

@@ -19,6 +19,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -2087,6 +2088,8 @@ def request_stop(gc_id: str, reason: str = "stop") -> str:
     """Stopp-Wunsch für einen laufenden Run hinterlegen. Gibt "" zurück, wenn es
     geklappt hat, sonst den Grund. Der eigentliche Kill passiert in gc_runner.watch_run
     — die kennt dann den Grund und schreibt „⏹ von dir gestoppt" statt „Absturz"."""
+    if gc_id in orphan_ids():   # vor RUN_LOCK: orphan_ids() nimmt das Lock selbst
+        return stop_orphan(gc_id) if reason == "stop" else ORPHAN_RUN_MSG
     with RUN_LOCK:
         beat = BEATS.get(gc_id)
         if gc_id not in RUNNING:
@@ -2164,6 +2167,38 @@ def restart_draining() -> bool:
     return restart_lock_held()
 
 
+ORPHAN_RUN_MSG = ("A run from before the last board restart is still working on this item — "
+                  "its reply arrives on its own as ↩ Late reply; start the next run after that "
+                  "(or ⏹ stop it)")
+
+
+def orphan_ids() -> dict[str, float]:
+    """Items, an denen ein verwaister Agent (Server-Tausch/Absturz mitten im Run) noch
+    arbeitet — {gc_id: Startzeit}. Zählt für UI und Startsperre wie RUNNING, damit kein
+    zweites `--resume` auf dieselbe Session startet."""
+    import gc_runner
+    try:
+        found = gc_runner.orphan_runs()
+    except Exception:  # noqa: BLE001 — Journal-Blick darf weder UI noch Start mitreißen
+        return {}
+    with RUN_LOCK:
+        mine = set(RUNNING)
+    return {i: float(m.get("started") or 0) for i, m in found.items() if i not in mine}
+
+
+def stop_orphan(gc_id: str) -> str:
+    """⏹ auf eine Waise: deren Wächter starb mit dem alten Server, die .stop-Marke liest
+    niemand. Also die Prozessgruppe direkt beenden (start_new_session → pgid == pid);
+    recover_journals erntet danach, was auf Platte steht. "" = gestoppt."""
+    import gc_runner
+    meta = gc_runner.orphan_runs().get(gc_id)
+    if not meta:
+        return "The run is not active (it may have just finished)"
+    try:
+        os.killpg(int(meta["pid"]), signal.SIGTERM)
+    except OSError as e:
+        return f"Cannot stop the leftover run: {e}"
+    return ""
 TERMINAL_HOLDS_MSG = ("The board terminal holds this item's session — finish there and press "
                       "Return to board before starting a run")
 TERMINAL_HANDOFF_ASK = (
@@ -2213,6 +2248,13 @@ def launch_gc_run(pending: dict, base_url: str, claude_cmd: str, timeout: int,
     auch bei Crash."""
     import gc_runner
     gc_id = pending["addr"]["id"]
+    if gc_id in orphan_ids():
+        # A leftover agent from before a board restart still works on this item; a second
+        # `--resume` beside it would mean two writers on one session. Checked before
+        # RUN_LOCK because orphan_ids() takes that lock itself.
+        if semaphore:
+            semaphore.release()
+        return False
     with RUN_LOCK:
         # Terminal creation and runner reservation share this lock; neither may
         # claim the same resumable session between the other's check and write.
@@ -4362,6 +4404,8 @@ class Handler(BaseHTTPRequestHandler):
             with RUN_LOCK:
                 running, since, queued = sorted(RUNNING), dict(RUNNING), sorted(QUEUED)
                 compacting, beats = sorted(COMPACTING), _public_beats()
+            orphans = orphan_ids()   # verwaiste Agenten zeigen sich wie laufende Runs
+            running, since = sorted({*running, *orphans}), {**orphans, **since}
             # `instance` = the folder name (GC_ROOT.name), NOT configured — it derives
             # from the folder name so a checkout is self-identifying without setup. The
             # header shows it small as a path handle next to the brand.
@@ -4405,6 +4449,8 @@ class Handler(BaseHTTPRequestHandler):
             with RUN_LOCK:
                 running, queued, compacting = sorted(RUNNING), sorted(QUEUED), sorted(COMPACTING)
                 since, beats = dict(RUNNING), _public_beats()
+            orphans = orphan_ids()
+            running, since = sorted({*running, *orphans}), {**orphans, **since}
             # running_since + beats gehören hierher, weil die UI im Sekundentakt /api/etag
             # pollt, /api/board aber nur bei echter Änderung — ohne das stünde die
             # Laufzeit-/Fortschrittsanzeige minutenlang still.
@@ -5049,8 +5095,25 @@ class Handler(BaseHTTPRequestHandler):
         has_stage = "stage" in payload
         has_parent = "parent" in payload
         has_move = "move" in payload
-        if not has_body and not has_stage and not has_parent and not has_move:
-            return self._json(400, {"error": "body, stage, parent or move is required"})
+        has_done = "done" in payload
+        if not has_body and not has_stage and not has_parent and not has_move and not has_done:
+            return self._json(400, {"error": "body, stage, parent, move or done is required"})
+
+        done: bool | None = None
+        sub_index: int | None = None
+        if has_done:
+            # Tick without a UI click: agents kept saying they could not tick a card. Without
+            # `sub` the card itself, with `sub` (1-based) one checklist entry. Closing the
+            # thread stays with the sweep: the run appends its reply only AFTER this write,
+            # and sweep.py closes the then-open thread of a done item.
+            if not isinstance(payload.get("done"), bool):
+                return self._json(400, {"error": "done must be true or false"})
+            done = payload["done"]
+            if "sub" in payload:
+                raw_sub = payload.get("sub")
+                if isinstance(raw_sub, bool) or not isinstance(raw_sub, int) or raw_sub < 1:
+                    return self._json(400, {"error": "sub must be a 1-based checklist index"})
+                sub_index = raw_sub
 
         body: list[str] | None = None
         expected_body_etag = ""
@@ -5205,6 +5268,22 @@ class Handler(BaseHTTPRequestHandler):
                             pos = sib[-1] + 1
                     dst_col.insert(pos, it)
                     changed = True
+            if done is not None and sub_index is not None:
+                subs = it.get("subs", [])
+                if sub_index > len(subs):
+                    return self._json(404, {"error": f"sub {sub_index} does not exist "
+                                                     f"(item has {len(subs)} checklist entries)"})
+                if subs[sub_index - 1]["done"] != done:
+                    subs[sub_index - 1]["done"] = done
+                    changed = True
+            elif done is not None and done != bool(it.get("done")):
+                # The same three fields as toggleDone() in index.html; done_at drives the
+                # 25-hour archiving in sweep.py.
+                it["done"] = done
+                it["date"] = date.today().isoformat()
+                it["done_at"] = (datetime.now(timezone.utc).isoformat(timespec="seconds")
+                                 if done else "")
+                changed = True
 
             # The proposed body may not smuggle in a format meta line. Example: a
             # body line "@gc-id: ..." would become an attribute on the next parse
@@ -5222,9 +5301,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._atomic_write(serialize_board(board))
                 else:
                     self._atomic_write(splice_item_block(raw, start, end, it))
-            return self._json(200, {"ok": True, "changed": changed, "id": it.get("id", ""),
-                                    "bodyEtag": item_body_etag(it.get("body", [])),
-                                    "etag": file_etag(self.board_path)})
+            result = {"ok": True, "changed": changed, "id": it.get("id", ""),
+                      "bodyEtag": item_body_etag(it.get("body", [])),
+                      "etag": file_etag(self.board_path)}
+            if sub_index is not None:
+                # Indices are no stable target (the checklist may have shifted since
+                # --show), so the response names the line it hit.
+                result["sub"] = it["subs"][sub_index - 1]["text"]
+            return self._json(200, result)
 
     def _gc_spawn_sub(self, payload: dict) -> None:
         """Sub-Faden abspalten — der Schreibpfad für „das hier sind eigentlich 3
@@ -5333,6 +5417,7 @@ class Handler(BaseHTTPRequestHandler):
             # drücken). Dasselbe Muster wie beim Action-Start (s. run_cockpit_action).
             return self._json(409, {"error": RESTART_DRAIN_MSG if restart_draining()
                                     else TERMINAL_HOLDS_MSG if terminal_holds(gc_id)
+                                    else ORPHAN_RUN_MSG if gc_id in orphan_ids()
                                     else "A run for this item is already in progress"})
         return self._json(202, {"ok": True, "id": gc_id, "model": model or "default",
                                 "run_mode": run_mode, "timeout": timeout})
