@@ -946,6 +946,20 @@ def test_journal_wache_liefert_verlorene_antwort_nach() -> None:
             os.utime(j2.out_path, (old, old))
             gc_runner.recover_journals("http://x", journal_dir=jdir, sidecar_dir=jdir)
             check("wache: halber Strom wird nicht nachgeliefert", not posted and not j2.meta_path.exists())
+
+            # Fresh output (written < RECOVER_GRACE ago) is not dropped: kept for the next pass.
+            posted.clear()
+            j3 = gc_runner.RunJournal("aaaabbbbcccc", "frisch", "http://x", 900, journal_dir=jdir)
+            j3.meta.update(pid=999999, started=old)
+            j3._write()
+            j3.out_path.write_text(json.dumps({"type": "result", "subtype": "success",
+                                               "result": "Frische Antwort", "session_id": "x"}) + "\n")
+            gc_runner.recover_journals("http://x", journal_dir=jdir, sidecar_dir=jdir)
+            check("wache: frische Antwort bleibt liegen statt gelöscht", not posted and j3.meta_path.exists())
+            os.utime(j3.out_path, (old, old))
+            gc_runner.recover_journals("http://x", journal_dir=jdir, sidecar_dir=jdir)
+            check("wache: im nächsten Durchlauf nachgeliefert",
+                  len(posted) == 1 and "Frische Antwort" in posted[0][2] and not j3.meta_path.exists())
         finally:
             gc_runner._open_gc_ids, gc_runner._post_append = orig_open, orig_post
 

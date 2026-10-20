@@ -2588,6 +2588,16 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
             # löschen (07.10., Faden d56d5e158d9d: Server-Tausch mitten im Run, der Agent schrieb
             # zu Ende, der nächste Turn des Nutzers kam vor der Ernte — die Wache warf die Antwort weg).
             # Ohne Session/gc_last: der Handle des neueren Runs darf nicht überschrieben werden.
+            if (meta.get("status") == "running" and out_path.exists()
+                    and time.time() - out_path.stat().st_mtime < RECOVER_GRACE):
+                # _late_reply waits until the output has rested RECOVER_GRACE. A finished,
+                # successful reply that is still fresh must survive until then — dropping it
+                # here would delete exactly the reply this branch exists to deliver.
+                fresh = parse_by_runner(meta.get("model", ""), out_path.read_text(),
+                                        err_path.read_text() if err_path.exists() else "",
+                                        None, out_path)
+                if fresh["ok"] and (fresh.get("reply") or "").strip():
+                    continue
             late = (_late_reply(meta, out_path, err_path, sidecar_dir)
                     if meta.get("status") == "running" else None)
             if late:

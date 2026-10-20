@@ -4820,6 +4820,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(202, {**released, "handoff_started": True})
         if action:
             return self._json(400, {"error": f"unknown action: {action}"})
+        if gc_id in orphan_ids():   # before RUN_LOCK: orphan_ids() takes it itself
+            return self._json(409, {"error": ORPHAN_RUN_MSG})
         with RUN_LOCK:
             # Live gefunden: der Knopf würde sonst ein `--resume` auf die Session legen, die
             # der laufende Run gerade selbst schreibt. Lesen ist harmlos, aber zwei Prozesse
@@ -5080,6 +5082,8 @@ class Handler(BaseHTTPRequestHandler):
 
         done: bool | None = None
         sub_index: int | None = None
+        if "sub" in payload and not has_done:
+            return self._json(400, {"error": "sub needs done (true or false)"})
         if has_done:
             # Tick without a UI click: agents kept saying they could not tick a card. Without
             # `sub` the card itself, with `sub` (1-based) one checklist entry. Closing the
@@ -5430,6 +5434,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(409, {"error": "Codex session compaction is not supported yet"})
         if terminal_holds(gc_id):
             return self._json(409, {"error": TERMINAL_HOLDS_MSG})
+        if gc_id in orphan_ids():   # before RUN_LOCK: orphan_ids() takes it itself
+            return self._json(409, {"error": ORPHAN_RUN_MSG})
         with RUN_LOCK:
             if gc_id in RUNNING or gc_id in QUEUED:
                 return self._json(409, {"error": "A run for this item is already in progress"})
