@@ -6,6 +6,31 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
+## [6.25.0] — 2026-10-21
+- feat(board): reliable runs, agents tick cards, a calmer board
+  - Ports generic origin fixes up to origin Build 6.49.10 (2026-10-20), selected by hand.
+  - Runs: the prompt goes to the CLI via stdin, not argv (it no longer shows in every
+    process list, and a loose `pkill -f` pattern can no longer hit it); the command line
+    carries a short `--name "Superboard run <id> · <title>"`. A run killed by another
+    process says so instead of "no result from Claude (exit 143)".
+  - Every run on macOS is wrapped in `caffeinate -ims`, so idle sleep no longer freezes a
+    run until the stall watchdog kills it (long runs keep `-dimsu`; other platforms
+    unchanged).
+  - A finished reply that the board lost in a restart is delivered as "↩ Late reply"
+    instead of being deleted. A leftover agent from before a restart now counts as
+    running: no second `--resume` on the same session, ⏹ stops it.
+  - `board_write.py --done/--undone [--sub N]` ticks a card or one checklist line;
+    `--show` lists done state and checklist lines. The run prompt says when to tick.
+  - Cells with more than 8 cards fold behind `+N MORE` (counting hidden cards that want
+    you); the backlog keeps its fold at 5.
+  - Old waits no longer turn red and no longer fill Attention; neither does an
+    overflowing 'Now'. Missed deadlines stay red.
+  - Fixes: date-only `@done-at` stamps no longer crash nightly archiving; a ready-made
+    `/repo-file/` link in a reply is not wrapped a second time.
+  - Deliberately not included: Supi, thread trimming, calmer-card restyle, link check,
+    restart-when-idle, Codex cost/usage tiles, OpenCode v2, and the origin's private
+    radar, Jev/Luna, done-hint and cockpit actions.
+
 ## [6.24.2] — 2026-10-02
 - fix(onboarding): client targets its own board; review fixes
   - The workspace client finds its own board: each start writes `.superboard/board-url`,

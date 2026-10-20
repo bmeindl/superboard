@@ -3762,10 +3762,8 @@ def test_cockpit_endpoint() -> None:
     check("cockpit: überfälliges Wait zählt als overdue, nicht als decaying",
           ok["waits"] == 2 and ok["waits_overdue"] == 1 and ok["waits_decaying"] == 1)
     hints = [h["text"] for h in server.attention_hints(ow, today)]
-    check("attention: überfälliges Wait steht beim Namen (mit Tagen + Wem)",
-          any("Lange überfällig" in h and "10 days" in h and "slim · !475" in h for h in hints))
-    check("attention: bald-überfälliges Wait taucht NICHT auf (nur Vorwarnung in der Kachel)",
-          not any("Bald überfällig" in h for h in hints))
+    check("attention: old waits are no longer listed",
+          not any("überfällig" in h for h in hints))
     # Runs heute: c…1 (gc_last, Journal-Duplikat egal) + c…5 offen + c…6 done + c…9 (nur Journal) = 4
     check("cockpit: runs_today zählt Items, done inklusive, dedupliziert", k["runs_today"] == 4)
 
@@ -4662,8 +4660,8 @@ def test_attention_hints() -> None:
     many = "## Voll\n\n### Jetzt\n\n" + "".join(f"- [ ] Item {i}\n\n" for i in range(6)) + \
            "### Bald\n\n### Geparkt\n\n# Personen\n\n# Notizen\n"
     lh = server.attention_hints(server.parse_board(many), monday, archive=Path("/nonexistent"))
-    check("attention: Jetzt über Limit (6/5) gemeldet",
-          any(h["kind"] == "limit" and "Voll" in h["text"] and "6/5" in h["text"] for h in lh))
+    check("attention: an overflowing 'Now' no longer produces a hint",
+          not any(h["kind"] == "limit" for h in lh))
     # Kappung liegt seit 2026-08-07 im Frontend (renderAttention, ATT_CAP): der Server
     # liefert ALLE fälligen Items mit Thema + Gruppe, damit der Weekend-Filter greifen
     # kann, BEVOR „die ersten 3" bestimmt werden. Vorher kappte der Server auf 3 — dann

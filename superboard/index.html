@@ -287,9 +287,6 @@
 
   .wait { font-family: var(--mono); font-size: var(--fs-meta); color: var(--muted); margin-top: 3px; cursor: pointer; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .wait.stale { color: var(--flag); font-weight: 700; }
-  .wait-overdue { font-family: var(--mono); font-size: var(--fs-meta); color: var(--flag);
-                  font-weight: 700; margin-top: 3px; overflow-wrap: anywhere; cursor: pointer; }
 
   .on-badge { font-family: var(--mono); font-size: var(--fs-meta); color: var(--muted); margin-top: 3px; cursor: pointer; }
   .on-badge.overdue { color: var(--flag); font-weight: 700; }
@@ -1019,7 +1016,6 @@
 
   .att-line { font-size: 12.5px; line-height: 1.6; }
   .att-line.due { color: var(--flag); font-weight: 600; }
-  .att-line.limit { color: var(--flag); }
   .att-line.reentry { color: var(--muted); }
   .att-empty { font-size: 12.5px; color: var(--muted); }
 
@@ -1189,7 +1185,7 @@
     transition: color .12s, border-color .12s;
   }
   .gc-more:hover { color: var(--ink); border-color: var(--line-dim); }
-  .gc-parkzone { display: flex; flex-direction: column; gap: 5px; margin-top: 5px; }
+  .gc-parkzone, .gc-fold { display: flex; flex-direction: column; gap: 5px; margin-top: 5px; }
 
 
   .gc-bottom {
@@ -1517,7 +1513,6 @@ const colLabel = col => COL_LABELS[col] || col;
 const CAP = { warn: 5, block: 8 };
 const capped = col => col === "Jetzt";   // "Wartet auf andere" zählt nicht — da kann er nichts tun
 const WAIT_COL = "Wartet auf andere";
-const WAIT_DECAY_DAYS = 7;
 const TERMIN_COL = "Termine";
 let renderedView = null;
 let board = null, etag = null, provenanceRev = null, saveTimer = null, saving = false, saveAgain = false,
@@ -2899,7 +2894,32 @@ const swimRowHint = name =>
   + "Ask your agent to rename, merge or regroup topics.";
 const swimCols = () => showTermine ? [...SWIM_COLS_BASE, ["DATES", TERMIN_COL]] : SWIM_COLS_BASE;
 const BACKLOG_VISIBLE = 5;      // sichtbare Backlog-Items pro Kategorie, Rest im Collapse (21.07.: „immer 5 … complexity reduction")
-const backlogOpen = new Set();  // aufgeklappte Kategorie-Backlogs überleben das Re-Rendern
+// Every other cell (matrix AND swimlanes) folds once it holds more than CELL_VISIBLE cards.
+const CELL_VISIBLE = 8;
+const foldOpen = new Set();     // opened cells (key see foldCell) survive re-rendering
+
+// Appends `nodes` to `cell`; from `limit` on, the rest moves behind a "+N MORE ▸" button.
+// The button also counts how many of the folded cards want you right now, so folding never
+// hides the very signal a card is loud for. Display only: dataset.ii stays, drag/drop keeps
+// referring to the data order.
+function foldCell(cell, nodes, key, limit, { horizon = false, why = "" } = {}) {
+  nodes.slice(0, limit).forEach(n => cell.appendChild(n));
+  const hidden = nodes.slice(limit);
+  if (!hidden.length) return;
+  const open = foldOpen.has(key);
+  const zone = el("div", horizon ? "gc-parkzone" : "gc-fold");  // only the backlog is dimmed
+  zone.style.display = open ? "flex" : "none";
+  hidden.forEach(n => zone.appendChild(n));
+  if (horizon) zone.appendChild(horizonCv(200, 16));
+  const wants = hidden.filter(n => n.matches(".wants")).length;
+  const btnMore = el("button", "gc-more");
+  btnMore.innerHTML = (open ? "&minus;" : "+") + hidden.length + " MORE"
+    + (wants && !open ? ` · ${wants} FOR YOU` : "") + " " + (open ? "&#9662;" : "&#9656;");
+  btnMore.title = why || `This cell shows at most ${limit} cards — the rest are here`;
+  btnMore.onclick = () => { if (open) foldOpen.delete(key); else foldOpen.add(key); render(); };
+  cell.appendChild(btnMore);
+  cell.appendChild(zone);
+}
 const isInboxTheme = t => t.name.trim().toLowerCase() === "inbox";
 const swimCatOf = t => SWIM_CATS.find(c => c.themes.includes(t.name.trim().toLowerCase())) || null;
 function swimEntries(themeIdxs, col) {
@@ -2991,29 +3011,12 @@ function swimCell(themeIdxs, col, colLabel, catKey) {
     if (nestedUnder(it, laneIds)) n.classList.add("sub-nested");  // Einzug in der Swimlane
     return n;
   };
-  if (col === "Geparkt" && catKey) {
-    const visible = entries.slice(0, BACKLOG_VISIBLE);
-    const hidden = entries.slice(BACKLOG_VISIBLE);
-    visible.forEach(t => cell.appendChild(addNode(t)));
-    if (hidden.length) {
-      const open = backlogOpen.has(catKey);
-      const zone = el("div", "gc-parkzone");
-      zone.style.display = open ? "flex" : "none";
-      hidden.forEach(t => zone.appendChild(addNode(t)));
-      zone.appendChild(horizonCv(200, 16));
-      const btnMore = el("button", "gc-more");
-      btnMore.innerHTML = (open ? "&minus;" : "+") + hidden.length + " MORE " + (open ? "&#9662;" : "&#9656;");
-      btnMore.title = `Backlog shows at most ${BACKLOG_VISIBLE} — the rest are here`;
-      btnMore.onclick = () => {
-        if (backlogOpen.has(catKey)) backlogOpen.delete(catKey); else backlogOpen.add(catKey);
-        render();
-      };
-      cell.appendChild(btnMore);
-      cell.appendChild(zone);
-    }
-  } else {
-    entries.forEach(t => cell.appendChild(addNode(t)));
-  }
+  // Backlog keeps its dimmed fold at BACKLOG_VISIBLE (with the event-horizon strip);
+  // every other column folds only from CELL_VISIBLE on, without the horizon.
+  const backlog = col === "Geparkt" && catKey;
+  foldCell(cell, entries.map(addNode), `s:${catKey || themeIdxs.join(",")}:${col}`,
+    backlog ? BACKLOG_VISIBLE : CELL_VISIBLE,
+    backlog ? { horizon: true, why: `Backlog shows at most ${BACKLOG_VISIBLE} — the rest are here` } : {});
   const addTi = themeIdxs.find(i => board.themes[i].cols[col]);
   if (addTi != null) cell.appendChild(makeAdder({ kind: "t", ti: addTi, col }, !entries.length));
   cell.addEventListener("dragover", e => { e.preventDefault(); cell.classList.add("dragover"); markDrop(cell, e.clientY); });
@@ -4110,11 +4113,14 @@ function cardScreenBar(loc, it) {
   }
   return bar;
 }
-const APP_VERSION = "2026-10-02c";
+const APP_VERSION = "2026-10-21a";
 function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function mdUrl(u) {
   const t = u.trim();
   if (/^(https?:\/\/|mailto:|#)/i.test(t)) return t;
+  // Already a viewer route (agent replies link `/repo-file/…` directly): pass through. The
+  // absolute-path rule below would otherwise wrap it a second time → 404.
+  if (t.startsWith("/repo-file/")) return t;
   if (/^\/.+\.(?:md|txt|py|ts|json|js|html|css|ya?ml|sh|csv|sql|toml)$/i.test(t))
     return "/repo-file/" + encodeURIComponent(t);
   if (t.startsWith("/")) return t;  // real app/API route
@@ -6187,7 +6193,6 @@ function renderChatDock() {
 const ATT_CAP = 3;
 const ATT_REST = {
   due:  n => `⏰ … + ${n} more due`,
-  wait: n => `⏳ … + ${n} more overdue waits`,
 };
 function renderAttention(d) {
   const box = $("#cz-attention");
@@ -6437,11 +6442,12 @@ function renderCellInner(loc, items, col) {
       return 0;  // sonst: Datenreihenfolge (Drag) bleibt stabil
     });
   const cellIds = new Set(order.map(([it]) => it.id).filter(Boolean));
-  regroupFamilies(order, p => p[0]).forEach(([it, ii]) => {
+  const nodes = regroupFamilies(order, p => p[0]).map(([it, ii]) => {
     const node = renderItem(loc, it, ii, col);
     if (nestedUnder(it, cellIds)) node.classList.add("sub-nested");  // Einzug: Kind unter co-located Parent
-    box.appendChild(node);
+    return node;
   });
+  foldCell(box, nodes, `m:${loc.kind}:${loc.ti ?? loc.pi ?? ""}:${col}`, CELL_VISIBLE);
   box.appendChild(makeAdder(loc, !order.length));
   return box;
 }
@@ -6474,9 +6480,9 @@ function renderItem(loc, it, ii, col) {
   div.dataset.ii = ii;  // Datenindex für positionsgenauen Drop (vor welches Item?)
   div.dataset.id = it.id || "";  // Adresse für handedOff(): frisch übergebene Karte finden und anblitzen
   if (!it.done) {
-    const waitLate = (it.wait || it.wait_since) && ageDays(it.wait_since) !== null
-      && ageDays(it.wait_since) >= WAIT_DECAY_DAYS;
-    const late = (it.due && dueDays(it.due) < 0) || waitLate;
+    // Only a missed deadline is loud. Old waits no longer turn red: a permanent state
+    // without a next action is noise, not a signal.
+    const late = it.due && dueDays(it.due) < 0;
     if (late) div.classList.add("wants", "w-late");
     else if (isUnread(it) || (gcSt === "for_owner" && (it.needs_input === "frage" || handoffTurn(it)))
       || (it.id && terminalWaiting(it.id))) div.classList.add("wants");
@@ -6549,16 +6555,14 @@ function renderItem(loc, it, ii, col) {
     };
     badges.appendChild(onB);
   }
-  const waitOverdue = (it.wait || it.wait_since) && !it.done
-    && ageDays(it.wait_since) !== null && ageDays(it.wait_since) >= WAIT_DECAY_DAYS;
-  if ((it.wait || it.wait_since) && !it.done && !waitOverdue) {
+  if ((it.wait || it.wait_since) && !it.done) {
+    // The wait badge stays neutral however old it is; the age is in the tooltip.
+    // Anchor is wait_since only (as in sweep.escalate_waits), not the creation date.
     const wd = ageDays(it.wait_since);
-    const od = wd !== null && wd >= WAIT_DECAY_DAYS;
-    const wb = el("span", "wait" + (od ? " stale" : ""));
+    const wb = el("span", "wait");
     wb.textContent = "⏳ " + (it.wait || "?");
     wb.title = `waiting on: ${it.wait || "(not set)"} · confirmed ${it.wait_since || "never"}`
-      + (od ? `\n⚠ no feedback for ${wd} days — follow up or kill it`
-            : `\nafter ${WAIT_DECAY_DAYS} days without confirmation it turns red (and remains in the column)`)
+      + (wd !== null ? ` (${wd}d ago)` : "")
       + "\nclick to edit (empty removes it and resets the date)";
     wb.onclick = e => {
       e.stopPropagation();
@@ -6685,22 +6689,6 @@ function renderItem(loc, it, ii, col) {
   row.appendChild(titleEl);
   row.appendChild(badges);
   div.appendChild(row);
-  const owd = (it.wait || it.wait_since) && !it.done ? ageDays(it.wait_since) : null;
-  if (owd !== null && owd >= WAIT_DECAY_DAYS) {
-    const ol = el("div", "wait-overdue");
-    ol.textContent = `⏳ overdue ${owd}d — follow up with ${it.wait || "(not set)"}`;
-    ol.title = `Wait not confirmed since ${it.wait_since} (threshold ${WAIT_DECAY_DAYS} days).\n`
-      + "The item remains here — click to confirm/change it (the clock restarts).";
-    ol.onclick = e => {
-      e.stopPropagation();
-      const w = prompt('What is this waiting on? (e.g. "reviewer · !475"; empty resets it)', it.wait || "");
-      if (w === null) return;
-      it.wait = w.trim();
-      it.wait_since = today();  // Anfassen = bestätigen — die Uhr startet neu
-      touched(); render();
-    };
-    div.appendChild(ol);
-  }
   if (it.subs.length && (loc.kind === "s" || subsOpen(it))) {
     const subs = el("div", "subs");
     it.subs.forEach((s, si) => {
@@ -6930,8 +6918,15 @@ function handedOff(id, msg) {
   status(msg, "saved");
   clearTimeout(statusTimer);
   statusTimer = setTimeout(() => { $("#savestate").className = ""; }, 8000);
-  const node = id && document.querySelector('.item[data-id="' + id + '"]');
+  let node = id && document.querySelector('.item[data-id="' + id + '"]');
   if (!node) return;
+  // A card inside a folded cell (foldCell) is unfolded first, otherwise it flashes unseen.
+  const fold = node.closest(".gc-fold, .gc-parkzone");
+  if (fold && fold.style.display === "none") {
+    fold.previousElementSibling?.click();
+    node = document.querySelector('.item[data-id="' + id + '"]');
+    if (!node) return;
+  }
   node.scrollIntoView({ behavior: "smooth", block: "center" });
   node.classList.add("just-landed");
   setTimeout(() => node.classList.remove("just-landed"), 2400);

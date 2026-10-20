@@ -50,7 +50,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.24.2"
+VERSION = "6.25.0"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -2739,7 +2739,6 @@ def load_actions() -> tuple[list[dict], str]:
 
 
 BOARD_ARCHIVE = GC_ROOT / "inbox" / "board-archive.md"
-JETZT_WARN = 5  # Spiegel von CAP.warn in index.html — "Jetzt" zeigt ab >5 den Zähler
 ARCHIVE_DAY_RE = re.compile(r"(?m)^## (\d{4}-\d{2}-\d{2})")
 DONE_BOX_RE = re.compile(r"(?m)^- \[[xX]\]")
 
@@ -2869,7 +2868,7 @@ def _done_week_views(board: dict, today: date, archive: Path) -> dict[str, int]:
 def attention_hints(board: dict, today: date, archive: Path | None = None) -> list[dict]:
     """Attention-Zeile V1 (E6): rein regelbasierte Tages-Hinweise, kein LLM.
     Inhalt [Bauplan E6]: Fälliges BEIM NAMEN (die Kacheln zählen nur — hier steht,
-    WAS brennt), „Jetzt"-über-Limit pro Thema, freitags das Wochenziel „Jetzt leer"
+    WAS brennt), freitags das Wochenziel „Jetzt leer"
     [Baustart-Blatt: Inbox-Zero gestrichen] + schlichte Telemetrie-Zeile [R4-★].
     kind steuert nur die Färbung im Frontend: due=rot (hängt), Rest neutral/blau."""
     hints: list[dict] = []
@@ -2890,28 +2889,8 @@ def attention_hints(board: dict, today: date, archive: Path | None = None) -> li
         label = "due today" if days == 0 else f"overdue by {days} day{'s' if days != 1 else ''}"
         hints.append({"kind": "due", "group": "due", "theme": theme, "src": src,
                       "text": f"⏰ {title} — {label}"})
-    # Überfällige Waits BEIM NAMEN (2026-07-22): seit dem Umbau bleiben sie in
-    # „Wartet auf andere" liegen, statt nach „Jetzt" zurückgeholt zu werden. Ohne diese
-    # Zeile wäre die Spalte der einzige Ort, an dem sie auftauchen — und genau dort
-    # schaut man nicht hin, solange nichts blinkt.
-    od_cut = (today - timedelta(days=WAIT_OVERDUE_DAYS)).isoformat()
-    waits: list[tuple[str, str, str, str, str]] = []  # (wait_since, titel, worauf, thema/person, herkunft)
-    for _s, _n, _c, it in _all_items(board):
-        since = it.get("wait_since", "")
-        if not it["done"] and since and since <= od_cut:
-            waits.append((since, it["title"], it.get("wait") or "?", _n, _s))
-    waits.sort()
-    for since, title, on_whom, theme, src in waits:
-        days = (today - date.fromisoformat(since)).days
-        hints.append({"kind": "due", "group": "wait", "theme": theme, "src": src,
-                      "text": f"⏳ {title} — waiting for {on_whom} for {days} days; follow up"})
-    for th in board["themes"]:
-        if _is_onboarding_theme(th["name"]):
-            continue
-        n = len([it for it in th["cols"].get("Jetzt", []) if not it["done"]])
-        if n > JETZT_WARN:
-            hints.append({"kind": "limit", "theme": th["name"], "src": "theme",
-                          "text": f"⚠ 'Now' is overflowing in {th['name']} ({n}/{JETZT_WARN})"})
+    # Old waits and "'Now' is overflowing" are no longer listed here: both were permanent
+    # states without a next action. New signals only once there is a real need.
     if today.weekday() == 4:  # Freitag
         jetzt_open = sum(len([it for it in th["cols"].get("Jetzt", []) if not it["done"]])
                          for th in board["themes"] if not _is_onboarding_theme(th["name"]))

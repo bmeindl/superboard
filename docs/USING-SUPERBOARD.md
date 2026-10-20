@@ -163,7 +163,8 @@ once. The two doors:
   Pure standard library, runs with any `python3`, no install. `--help` lists the
   whole sanctioned surface: `--show` (body + revision), `--body-file` +
   `--body-etag` (replace a body, optimistic locking), `--stage` (process stage),
-  `--new-card` / `--ensure-card` (create a to-do; never starts a run), `--new-topic`,
+  `--done` / `--undone` (tick or untick the card; with `--sub N` one checklist line,
+  numbered as `--show` lists them), `--new-card` / `--ensure-card` (create a to-do; never starts a run), `--new-topic`,
   `--docs`. Column names are `Now`, `Next`, `Backlog`. The client talks to
   `http://127.0.0.1:47822`; a board on another port takes `--url` or `GC_BOARD_URL`.
 - `POST /api/gc-append` — the endpoint the runner itself uses to report back.

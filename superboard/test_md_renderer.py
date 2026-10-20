@@ -112,3 +112,11 @@ def test_tables_and_lists_survive(render):
     """Regressionsanker fuer die Bloecke, an denen wir NICHT geschraubt haben."""
     assert "<table>" in render("| a | b |\n|---|---|\n| 1 | 2 |")
     assert "<ul>" in render("- one\n- two")
+
+
+def test_existing_repo_file_links_are_not_wrapped_twice(render):
+    # `[Plan](/repo-file/x/plan.md)` in an agent reply became
+    # `/repo-file/%2Frepo-file%2F…` (absolute-path rule) → 404.
+    html = render("[Plan](/repo-file/docs/plan.md)")
+    assert 'href="/repo-file/docs/plan.md"' in html
+    assert "%2Frepo-file" not in html

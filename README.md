@@ -177,6 +177,7 @@ python3 .superboard/board_write.py --new-card 'Renew the domain' \
   --topic Product --col Now --ask 'Check which registrar it is'
 python3 .superboard/board_write.py --id 3f9a2c7b1d4e --show          # body + etag
 python3 .superboard/board_write.py --id 3f9a2c7b1d4e --stage 'tested · pytest *(2026-09-05)*'
+python3 .superboard/board_write.py --id 3f9a2c7b1d4e --done          # tick the card (--sub N: one checklist line)
 
 # 2 · the HTTP endpoint the runner itself uses to report back
 curl -s localhost:47822/api/gc-append -H 'content-type: application/json' \
@@ -186,7 +187,7 @@ curl -s localhost:47822/api/gc-append -H 'content-type: application/json' \
 `kind` is `ask` (you, to the agent), `reply` (an agent, to you), `done`, or `sys`.
 A cron job, a CI step, or a different agent can post into a card this way; the
 board shows it as a normal thread turn. Agent-created asks must also send `"by":"agent"`
-to preserve authorship; direction (`ask`/`reply`) and author are separate. Details in [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.4.0/docs/USING-SUPERBOARD.md#writing-into-the-board-from-outside).
+to preserve authorship; direction (`ask`/`reply`) and author are separate. Details in [Using Superboard](https://github.com/bmeindl/superboard/blob/v0.5.0/docs/USING-SUPERBOARD.md#writing-into-the-board-from-outside).
 
 ## Why local files?
 
