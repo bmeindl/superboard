@@ -10,6 +10,20 @@ run; day-to-day facts (current version, open issues, in-flight decisions)
 belong in the CHANGELOG or the board itself, not here — keeping temporary
 facts out of this file is what keeps it worth reading.
 
+## Optional Crew
+
+The setup command creates editable role instructions and a collaborator registry
+under the workspace's `crew/` directory. The first ask on a Crew card selects its
+owner. The runner launches each role in a fresh CLI session in the same workspace.
+The owner sees the card. A delegated role receives its own instructions and the
+exchange with the owner. All roles share the selected CLI's host permissions.
+A collaborator entry controls message routing and does not isolate file access.
+
+The runner saves completed role messages in `.superboard/crew/<card>/` before
+advancing. An interrupted exchange resumes from saved steps. The owner returns
+the final answer through the Board's ordinary reply path. Its delivery ID lets the
+server acknowledge a repeated append without adding a duplicate reply.
+
 ## Components
 
 - `server.py` — the local single-writer HTTP server: serves the board UI,

@@ -14,14 +14,22 @@ use the terminal. Everything below assumes an agent is in the loop.
 
 ![Superboard with standing task threads](https://raw.githubusercontent.com/bmeindl/superboard/main/docs/assets/superboard-hero.png)
 
-## New in 0.4
+## Try a crew on one card
 
-Threads show who wrote each turn, its timestamp and the reported model when available.
-New replies appear while a card is open, and compact Cockpit cards make the latest result
-easier to scan. Existing threads and workspace files stay yours when you upgrade.
+Give a writer a folder of release notes and ask for a checked summary. The
+writer brings in a source checker, resolves its questions and replies on your
+original card. Two editable roles, a blank blueprint and a pair of fictional
+releases let you try the handover before using your own project.
 
-The experimental Jev reviewer, automatic reply suggestions and thread-cut advice are not
-bundled in this release. You need no classifier account or API key to use the board.
+Once you have a board, add the optional starter to the same workspace:
+
+```sh
+uvx superboard --setup-crew ~/Superboard
+```
+
+Open `crew/README.md` in that workspace for the first card to paste, how to
+adapt a role and three improvement rituals you can run when you need them.
+[Read the crew walkthrough](https://github.com/bmeindl/superboard/blob/main/superboard/crew_starter/README.md).
 
 ## Install
 

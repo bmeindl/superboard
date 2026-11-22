@@ -1,0 +1,6 @@
+{
+  "roles": {
+    "writer": {"collaborators": ["checker"]},
+    "checker": {"collaborators": []}
+  }
+}
