@@ -35,6 +35,7 @@ from datetime import datetime
 from pathlib import Path
 
 import provenance
+import crew_exchange as _crew
 import sidecar as _sc  # geteilte Sidecar-Logik (auch server.py/migrate_diet.py) — board.md-Diät 2026-07-16
 import git_state as _git  # Kern: Prompt-Gitblock + Faden-Anchor, unabhängig von Receipts
 import receipt_hook as _receipt  # optionale Run-Telemetrie; nie Teil des Kernpfads
@@ -2362,10 +2363,13 @@ def answer_model(out: dict) -> str:
 
 
 def _post_append(base_url: str, gc_id: str, text: str, session: str, gc_last: str = "",
-                 answer_runner: str = "", model: str = "", cut_hint: dict | None = None) -> None:
+                 answer_runner: str = "", model: str = "", cut_hint: dict | None = None,
+                 delivery_id: str = "") -> None:
     """Antwort zurück ins Board — mit Retries, weil das der einzige Weg ist,
     auf dem der Run sichtbar wird. Wirft nach 3 Fehlversuchen."""
     payload = {"kind": "reply", "by": "agent", "text": text, "addr": {"id": gc_id}}
+    if delivery_id:
+        payload["delivery_id"] = delivery_id
     if reference := _sc.REF_RE.search(text):
         payload["source"] = reference.group(1)
     if session:
@@ -2564,7 +2568,38 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
         # (discard() räumt sie, die Recovery tat es bis 2026-07-27 nicht).
         drop = [meta_path, out_path, err_path, base.with_suffix(".stop")]
 
-        if gc_id not in open_ids:  # Antwort ist schon im Faden (oder Item geschlossen)
+        if meta.get("crew") and meta.get("status") == "running":
+            # A role message belongs to its recipient, even when the card received
+            # a new human turn while the server was restarting.
+            if (_pid_alive(meta.get("pid"))
+                    or time.time() - max(meta_path.stat().st_mtime, out_path.stat().st_mtime
+                                         if out_path.exists() else 0) < RECOVER_GRACE):
+                continue
+            try:
+                parsed = parse_by_runner(meta.get("model", ""), out_path.read_text() if out_path.exists() else "",
+                                         err_path.read_text() if err_path.exists() else "", None, out_path)
+                recovered = _recover_exchange(meta, parsed)
+                text, _, stamp = _outcome(recovered, gc_id, title, sidecar_dir)
+                if gc_id in open_ids or recovered["ok"]:
+                    # Persist exactly the text/pointer and delivery id sent. A lost
+                    # acknowledgement can be reconciled under the server's write lock.
+                    meta.update(status="ready", reply_text=text, session="", gc_last=stamp if gc_id in open_ids else "",
+                                answer_model=answer_model(parsed), delivery_id=uuid.uuid4().hex)
+                    temporary = meta_path.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(meta))
+                    temporary.replace(meta_path)
+                    _post_append(base_url, gc_id, text, "", meta["gc_last"], runner_of(meta.get("model", "")),
+                                 meta["answer_model"], delivery_id=meta["delivery_id"])
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+                notes.append(f"recover: {gc_id} — Crew recovery needs attention: {error}")
+                continue
+            for p in drop:
+                p.unlink(missing_ok=True)
+            notes.append(f"recover: {gc_id} Crew exchange reconciled")
+            continue
+
+        crew_delivery = meta.get("status") == "ready" and meta.get("delivery_id")
+        if gc_id not in open_ids and not crew_delivery:  # Reply already landed, or item closed.
             # ABER: nur aufräumen, wenn hier wirklich niemand mehr arbeitet. Dieser Zweig
             # löschte früher blind — und riss damit einem LAUFENDEN Run die .out.json unter
             # den Füßen weg (23.07., Faden 6b525d987c57: "❌ Runner-Crash: [Errno 2] …
@@ -2649,7 +2684,8 @@ def recover_journals(base_url: str = DEFAULT_URL, journal_dir: Path | None = Non
                 text, session, gc_last = _outcome(parsed, gc_id, title, sidecar_dir)
         try:
             _post_append(base_url, gc_id, text, session, gc_last,
-                         runner_of(meta.get("model", "")), model_used)
+                         runner_of(meta.get("model", "")), model_used,
+                         **({"delivery_id": meta["delivery_id"]} if meta.get("delivery_id") else {}))
         except RuntimeError as e:
             notes.append(f"recover: {gc_id} — append failed ({e}); keeping journal")
             continue
@@ -2723,6 +2759,68 @@ def _continue_after_background_cut(out: dict, claude_cmd: str, timeout: int, mod
 
 
 
+def _run_exchange(exchange, board_prompt, claude_cmd, timeout, model, journal, on_beat, agent_env):
+    """Only completed owner prose enters the normal Board reply path."""
+    deadline = time.monotonic() + timeout
+    try:
+        with exchange.locked():
+            return _exchange_steps(exchange, board_prompt, claude_cmd, model, journal, on_beat, agent_env, deadline)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return _crew.failure(f"Crew could not continue: {error}. Check the role files and send 'continue crew'.")
+
+
+def _exchange_steps(exchange, board_prompt, claude_cmd, model, journal, on_beat, agent_env, deadline):
+    events = exchange.events()
+    while not events or events[-1]["action"] != "FINAL":
+        if len(events) >= _crew.MAX_STEPS:
+            return _crew.failure("Crew reached its exchange limit. Send a new, narrower task.")
+        remaining = int(deadline - time.monotonic())
+        if remaining < 1:
+            return _crew.failure("Crew timed out. Send 'continue crew' to resume.")
+        prompt = exchange.prompt(events, board_prompt)
+        # Clear the previous stream BEFORE publishing the next step index. After
+        # a crash, a stream can then belong only to the tagged step or be empty.
+        for stream in (journal.out_path, journal.err_path, journal.out_path.with_suffix(".last")):
+            stream.unlink(missing_ok=True)
+        journal.meta.update(crew={"owner": exchange.owner, "file": exchange.path.name,
+                                  "step": len(events)}, pid=None)
+        journal._write()
+        journal.save_prompt(prompt)
+        started = time.time()
+        out = spawn_agent(prompt, "", claude_cmd, remaining, model, journal=journal,
+                          on_beat=on_beat, extra_env={**agent_env, "SUPERBOARD_CREW_ROLE": exchange.turn(events)},
+                          keep_awake=journal.meta["run_mode"] == "long")
+        if not out["ok"]:
+            out["session_id"] = ""
+            out["raw_error"] = (out.get("raw_error") or "Crew run failed") + ". Send 'continue crew' to resume."
+            return out
+        event = exchange.record(events, out["reply"])
+        events.append(event)
+        if event["action"] == "FINAL":
+            return {**out, "reply": event["text"], "session_id": ""}
+        log_usage(journal.meta["gc_id"], journal.meta["title"], model, False, out,
+                  out_path=journal.out_path, started=started)
+    return {"ok": True, "reply": events[-1]["text"], "session_id": "", "denials": []}
+
+
+def _recover_exchange(meta, parsed):
+    """Consume a completed orphan turn once, including the save/next-launch window."""
+    info = meta["crew"]
+    if not re.fullmatch(r"[0-9a-f]{24}\.json", info["file"]):
+        raise ValueError("Invalid Crew journal key")
+    data = _p.DATA
+    path = _crew.within(data, data / "crew" / meta["gc_id"] / info["file"])
+    config = _crew.within(GC_ROOT, GC_ROOT / "crew" / "crew.json")
+    exchange = _crew.Exchange(info["owner"], json.loads(config.read_text())["roles"], GC_ROOT, path)
+    with exchange.locked():
+        events = exchange.events()
+        if len(events) == info["step"] and parsed.get("ok"):
+            events.append(exchange.record(events, parsed["reply"]))
+        if events and events[-1]["action"] == "FINAL":
+            return {**parsed, "ok": True, "reply": events[-1]["text"], "session_id": "", "denials": []}
+        return _crew.failure("Crew exchange paused after restart. Send 'continue crew' on this card to resume.")
+
+
 def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVATE_CMD,
              timeout: int = DEFAULT_TIMEOUT, sidecar_dir: Path = SIDECAR_DIR,
              model: str = "", journal_dir: Path | None = None, on_beat=None) -> dict:
@@ -2777,12 +2875,24 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
         scope="all",
     )
 
+    try:
+        exchange = _crew.Exchange.for_card(pending, GC_ROOT, _p.DATA)
+        crew_error = None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        exchange, crew_error = None, _crew.failure(f"Invalid Crew setup: {error}")
+    if exchange or crew_error:
+        resume_id = ""
     prompt = build_prompt(pending, resume=bool(resume_id), sidecar_dir=sidecar_dir,
                           runner=lane, retrieved_context=retrieved_context, model=resolve_profile(model)[0])
     journal.save_prompt(prompt)  # Observability: „🔍 Prompt anzeigen" im ⋯-Menü
     agent_env = {"GC_BOARD_URL": base_url}
-    out = spawn_agent(prompt, resume_id, claude_cmd, timeout, model, journal=journal,
-                      on_beat=on_beat, extra_env=agent_env, keep_awake=run_mode == "long")
+    if crew_error:
+        out = crew_error
+    elif exchange:
+        out = _run_exchange(exchange, prompt, claude_cmd, timeout, model, journal, on_beat, agent_env)
+    else:
+        out = spawn_agent(prompt, resume_id, claude_cmd, timeout, model, journal=journal,
+                          on_beat=on_beat, extra_env=agent_env, keep_awake=run_mode == "long")
     resumed = bool(resume_id)
     if not out["ok"] and not out.get("killed") and resume_id and _looks_like_dead_session(out):
         # Resume kann legitim wegbrechen (Session gelöscht/zu alt) → EIN frischer Versuch.
@@ -2800,7 +2910,7 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
         resumed = False
         if out["ok"]:
             out["reply"] = "(new session — the old one could no longer be resumed) " + out["reply"]
-    if (out.get("ok") and out.get("orphaned_tasks")
+    if (not exchange and out.get("ok") and out.get("orphaned_tasks")
             and runner_of(model).startswith("claude") and SESSION_ID_RE.match(out.get("session_id") or "")):
         out = _continue_after_background_cut(out, claude_cmd, max(1, min(timeout, timeout - int(time.time() - started))), model, journal, on_beat,
                                              keep_awake=run_mode == "long")
@@ -2816,9 +2926,14 @@ def run_item(pending: dict, base_url: str = DEFAULT_URL, claude_cmd: str = PRIVA
 
     text, session, gc_last = _outcome(out, gc_id, title, sidecar_dir)
     model_used = answer_model(out)
+    delivery = {}
+    if exchange and out["ok"]:
+        text = _inline_reply(gc_id, title, text, sidecar_dir)
+        journal.meta["delivery_id"] = uuid.uuid4().hex
+        delivery = {"delivery_id": journal.meta["delivery_id"]}
     journal.ready(text, session, gc_last, model_used)  # ab hier ist die Antwort durabel — der Append darf scheitern
     try:
-        _post_append(base_url, gc_id, text, session, gc_last, runner_of(model), model_used)
+        _post_append(base_url, gc_id, text, session, gc_last, runner_of(model), model_used, **delivery)
     except RuntimeError as e:
         # Journal bleibt liegen — recover_journals() trägt beim nächsten Serverstart nach.
         print(f"gc_runner: {e} — reply is stored in journal {journal.meta_path.name}", file=sys.stderr)

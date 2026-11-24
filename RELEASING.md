@@ -43,6 +43,10 @@ what a stranger gets now".
 - Every supported OS/Python claimed in the README gets at least the smoke; remove
   untested claims.
 
+- When Crew changes, install the wheel, run the example on a fresh card and inspect
+  the saved writer, checker and final messages. Record whether the runner used a
+  provider or scripted replies. Exercise an interrupted return and a solo upgrade.
+
 ## 3 · Product surface — does the outside still match the inside?
 
 - Read the README top to bottom as a stranger and run every command verbatim.

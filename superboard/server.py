@@ -50,7 +50,7 @@ DEFAULT_BOARD = _p.BOARD
 # Internal board build, used to trace which code is running. Public package releases
 # use the separate version in pyproject.toml; an internal bump must never overwrite it.
 # (APP_VERSION in index.html is only the browser auto-reload stamp.)
-VERSION = "6.25.0"
+VERSION = "6.26.0"
 # A workspace may carry an identity wrapper at tools/claude-identities/claude-private —
 # scripts/testrig.sh writes exactly that file so a rig run cannot inherit the operator's
 # Claude settings, skills and MCP servers. A normal installation has no such file and gets
@@ -397,8 +397,10 @@ def _capture_author(payload: dict, default: str = "human") -> str:
 
 
 def authored_turn(board_path: Path, item: dict, text: str, kind: str, author: str,
-                  model: str | None = None) -> dict:
+                  model: str | None = None, delivery_id: str | None = None) -> dict:
     event = provenance.new_turn(kind, text, author)
+    if delivery_id:
+        event["turn_id"] = delivery_id
     if model:
         event["model"] = model  # vor dem Sidecar-Write, damit auch dessen Meta-Zeile es trägt
     event["text"] = re.sub(r"\s*\n+\s*", " · ", sidecar.inline_turn(
@@ -4977,6 +4979,12 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._json(400, {"error": str(exc)})
         raw_text = (payload.get("text") or "").strip()
+        delivery_id = payload.get("delivery_id")
+        if delivery_id is not None and (
+                requested_kind != "reply" or author != "agent" or not isinstance(delivery_id, str)
+                or not re.fullmatch("[0-9a-f]{32}", delivery_id) or "\n" in raw_text
+                or (len(raw_text) > sidecar.INLINE_MAX and not sidecar.REF_RE.search(raw_text))):
+            return self._json(400, {"error": "delivery_id requires an inline agent reply and a 32-character hex id"})
         source = payload.get("source")
         if source is not None:
             reference = sidecar.REF_RE.search(raw_text)
@@ -5031,7 +5039,13 @@ class Handler(BaseHTTPRequestHandler):
                 model = provenance.turn_model(model) if model else None
             except ValueError:
                 model = None
-            event = authored_turn(self.board_path, it, raw_text, kind, author, model)
+            if delivery_id:
+                existing = next((e for e in it["thread"] if e.get("turn_id") == delivery_id), None)
+                if existing:
+                    if (existing["kind"], existing["author"], existing["text"]) != (kind, author, raw_text):
+                        return self._json(409, {"error": "delivery_id already used for a different turn"})
+                    return self._json(200, {"ok": True, "id": it["id"], "kind": kind, "etag": file_etag(self.board_path)})
+            event = authored_turn(self.board_path, it, raw_text, kind, author, model, delivery_id)
             if source is not None:
                 event["source"] = source
             text = event["text"]

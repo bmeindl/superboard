@@ -210,7 +210,7 @@ def test_version_und_changelog_synchron() -> None:
     project = (here.parent / "pyproject.toml").read_text(encoding="utf-8")
     pm = _re.search(r'^version = "([^"]+)"', project, _re.M)
     releases = (here.parent / "RELEASES.md").read_text(encoding="utf-8")
-    rm = _re.search(r"^## \[(\d+\.\d+\.\d+)\]", releases, _re.M)
+    rm = _re.search(r"^## \[(\d+\.\d+\.\d+(?:rc\d+)?)\]", releases, _re.M)
     check(f"version: public pyproject {pm.group(1) if pm else '?'} == RELEASES {rm.group(1) if rm else '?'}",
           pm is not None and rm is not None and pm.group(1) == rm.group(1))
     check("changelog: kein [Unreleased] mehr (abgeschafft 23.07.)", "## [Unreleased]" not in text)

@@ -313,6 +313,8 @@ def run() -> None:
         description="Serve a Superboard workspace. Name the workspace explicitly on first run."
     )
     ap.add_argument("workspace", nargs="?", help="high-level workspace directory")
+    ap.add_argument("--setup-crew", action="store_true",
+                    help="install editable Crew roles, examples and rituals in this workspace, then exit")
     ap.add_argument("--port", type=int, default=47822)
     try:
         public_version = importlib.metadata.version("superboard")
@@ -350,6 +352,17 @@ def run() -> None:
     _print_preflight(root, fresh=not selected_board.exists())
 
     board = _bootstrap(root)
+    if args.setup_crew:
+        from superboard.crew_setup import install_crew
+
+        try:
+            created = install_crew(root)
+        except OSError as error:
+            ap.exit(1, f"superboard: Crew setup failed: {error}\n")
+        print(f"superboard: Crew setup created {created} files. Your guide is {root / 'crew/README.md'}")
+        print("Start Superboard with this workspace. On a new card, ask:")
+        print("@writer Draft release notes from crew/examples/release-1.md. Include a source check before you finish.")
+        return
     # The workspace client reads this to find THIS board: without it a second board on
     # another port would receive the cards (board_write.py defaults to 47822).
     (root / ".superboard" / "board-url").write_text(f"http://127.0.0.1:{args.port}\n", encoding="utf-8")
