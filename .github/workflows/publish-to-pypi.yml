@@ -100,7 +100,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           # Title = the RELEASES.md heading after the version, e.g. "Crew starter".
-          heading="$(grep -m1 -F "## [${version}]" RELEASES.md || true)"
+          heading="$(awk -v h="## [${version}]" 'index($0, h) == 1 { print; exit }' RELEASES.md)"
           subtitle=""
           if [[ "$heading" == *"· "* ]]; then subtitle="${heading#*· }"; fi
           title="$GITHUB_REF_NAME${subtitle:+ — $subtitle}"
