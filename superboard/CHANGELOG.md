@@ -6,7 +6,7 @@ change by its size and is not a stability promise. The PUBLIC package version li
 releases. Until 25.08.2026 both were one number, which is why this file runs from 0.1.1
 to 6.x and why the public version restarted at 0.1.0.
 
-## [6.26.0] · Crew starter
+## [6.26.0] — 2026-11-24 · Crew starter
 - Add workspace-owned role setup and durable, opt-in handovers on a card.
 
 ## [6.25.0] — 2026-10-21

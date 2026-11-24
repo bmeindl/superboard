@@ -7,6 +7,20 @@ before upgrading. `Build` names the internal board stand that ships inside a rel
 — that number counts every change by size and is not a stability promise.
 `CHANGELOG.md` inside the package is that internal build history.
 
+## [0.6.0] — 2026-11-24 · Crew starter
+
+- Set up a writer and source checker with `uvx superboard@latest --setup-crew WORKSPACE`.
+  Try a release note on one card, follow its source check, then adapt the
+  role instructions to your own project. Existing cards and edits are preserved.
+- On a Crew card, the owner can send a brief, answer a question, request a revision
+  and bring the result back. Completed steps are saved in the workspace.
+- The starter includes two fictional releases, an editable role blueprint and
+  three on-demand rituals for reviewing a miss, recording a preference and
+  checking whether an instruction change helped.
+- Same package as 0.6.0rc1 (24 November), which passed a live Claude writer/checker
+  trial and a fresh-install walkthrough. Crew is optional; a solo board is unchanged.
+  Build 6.26.0.
+
 ## [0.6.0rc1] · Crew starter (release candidate)
 
 - Set up a writer and source checker with `superboard --setup-crew WORKSPACE`.

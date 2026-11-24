@@ -95,4 +95,20 @@ jobs:
       - name: Create GitHub release after PyPI succeeds
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --notes-file release-notes.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Title = the RELEASES.md heading after the version, e.g. "Crew starter".
+          heading="$(awk -v h="## [${version}]" 'index($0, h) == 1 { print; exit }' RELEASES.md)"
+          subtitle=""
+          if [[ "$heading" == *"· "* ]]; then subtitle="${heading#*· }"; fi
+          title="$GITHUB_REF_NAME${subtitle:+ — $subtitle}"
+          # PEP 440 pre-releases (0.6.0rc1, 1.0a2, 1.0b1, 1.0.dev1) must not become "Latest".
+          if [[ "$version" =~ (a|b|rc|\.dev)[0-9]+$ ]]; then
+            flags=(--prerelease --latest=false)
+          else
+            flags=(--latest)
+          fi
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$title" --notes-file release-notes.md "${flags[@]}"

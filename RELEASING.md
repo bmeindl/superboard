@@ -74,6 +74,11 @@ what a stranger gets now".
   Trusted Publishing. Never use a local PyPI token.
 - Verify from outside: clean environment, `uvx superboard --version`, first run,
   PyPI page, GitHub release page, README images and links.
+- A release candidate (`0.6.0rc1`, `a`, `b`, `.dev`) ships with the same workflow; it
+  marks the GitHub release as a pre-release and leaves "Latest" alone. Check that on
+  the releases page after every tag.
+- When a README command needs the new version, write `uvx superboard@latest …`: plain
+  `uvx superboard` can reuse an older cached environment.
 
 ## 6 · After
 
@@ -122,3 +127,11 @@ README claim nobody verified this round.
   origin commit fixed it. Re-check new code paths against features the public package
   lacks (here: an orphan guard placed where origin had restart-now code). A model-diverse
   review of the port found three real gaps the suite missed; budget for one fix round.
+- 2026-11-24 · 0.6.0rc1 → 0.6.0: the tag workflow created the rc's GitHub release as
+  "Latest" with no title, so a pre-release briefly replaced 0.5.0 on the releases page
+  (fixed by hand). The workflow now titles releases from `RELEASES.md` and passes
+  `--prerelease --latest=false` for pre-release versions. While the rc was out, the
+  public README already showed `uvx superboard --setup-crew`, which still resolved
+  to 0.5.0: README commands that need a new flag must not reach main before the final
+  release, or must pin the version. A stranger-style walkthrough of the published rc
+  ran before promotion.
